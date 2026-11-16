@@ -7,17 +7,29 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 object WidgetUpdater {
   private const val UNIQUE_WORK_NAME = "syllabus_widget_periodic_refresh"
 
-  suspend fun updateAllWidgets(context: Context) {
+  suspend fun refreshAll(context: Context) {
     val appContext = context.applicationContext
-    runCatching { OverviewWidget().updateAll(appContext) }
-    runCatching { DarkProgressWidget().updateAll(appContext) }
-    runCatching { TodaysPlanWidget().updateAll(appContext) }
-    runCatching { DoneRingWidget().updateAll(appContext) }
-    runCatching { ContinueStudyingWidget().updateAll(appContext) }
+    withContext(Dispatchers.Default) {
+      coroutineScope {
+        launch { runCatching { OverviewWidget().updateAll(appContext) } }
+        launch { runCatching { DarkProgressWidget().updateAll(appContext) } }
+        launch { runCatching { TodaysPlanWidget().updateAll(appContext) } }
+        launch { runCatching { DoneRingWidget().updateAll(appContext) } }
+        launch { runCatching { ContinueStudyingWidget().updateAll(appContext) } }
+      }
+    }
+  }
+
+  suspend fun updateAllWidgets(context: Context) {
+    refreshAll(context)
   }
 
   fun schedulePeriodicRefresh(context: Context) {

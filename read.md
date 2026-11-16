@@ -12,6 +12,8 @@
 - **Quick Add Chapter Sheet**: Accessible from the center `+` button in the bottom navigation bar across primary screens, with book dropdown, chapter name validation, numeric chapter number validation, and "Mark as Completed" switch.
 - **Progress Analytics**: `Overall` and `By Book` tabs; overall percentage card with cumulative progress chart and Completed/Remaining/Total breakdown; weekly `Study Trend` bar chart (`This Week` / `Last Week`) computed from `completedAt` timestamps.
 - **Daily Study Reminders**: Scheduled via `AlarmManager` at a user-chosen time (default 8:00 PM), showing remaining chapters for the day (e.g., `"2 chapters left today. Keep going!"`). Requests `POST_NOTIFICATIONS` at runtime on Android 13+ and reschedules after reboot via `BootCompletedReceiver`.
+- **Local Data Backup (Export / Import)**: Zero-permission Storage Access Framework JSON export (`syllabus_tracker_backup_YYYY-MM-DD.json`) and validated import supporting **Replace** or **Merge** (deduplicating by book name + chapter number) inside an atomic Room transaction.
+- **5 Android Home-Screen Widgets + Instant Refresh**: Jetpack Glance widgets (`Overview`, `Dark Progress`, `Today's Plan`, `Done Ring`, `Continue Studying`) updated immediately after DB writes, on app start/resume, and on date/time/timezone/boot events, backed by a 30-minute WorkManager fallback.
 - **Empty States**: Clean empty states with call-to-action buttons when no books or no chapters exist.
 
 ---
@@ -108,6 +110,9 @@ app/src/main/java/com/example/
 ├── MainActivity.kt
 ├── SyllabusApplication.kt
 ├── data/
+│   ├── backup/
+│   │   ├── BackupManager.kt
+│   │   └── BackupModels.kt
 │   ├── local/
 │   │   ├── SyllabusDatabase.kt
 │   │   ├── dao/SyllabusDao.kt
@@ -123,6 +128,15 @@ app/src/main/java/com/example/
 │   ├── NotificationHelper.kt
 │   ├── StudyReminderReceiver.kt
 │   └── StudyReminderScheduler.kt
+├── widgets/
+│   ├── ContinueStudyingWidget.kt
+│   ├── DarkProgressWidget.kt
+│   ├── DoneRingWidget.kt
+│   ├── OverviewWidget.kt
+│   ├── TodaysPlanWidget.kt
+│   ├── WidgetBitmapHelper.kt
+│   ├── WidgetRefreshWorker.kt
+│   └── WidgetUpdater.kt
 └── ui/
     ├── components/
     │   ├── AddChapterSheet.kt
@@ -156,7 +170,7 @@ app/src/main/java/com/example/
 2. **Books (`BooksScreen`) & Book Chapters (`BookDetailScreen`)**: Header with inline expandable search field and sort/add overflow menu; pill filter chips (`All`, `In Progress`, `Completed`); book cards with icon box, title, `x / y chapters`, percentage, progress bar, and chevron; bottom `"+ Add Book"` pill button. Tapping a book opens `BookDetailScreen`, showing book progress summary and ordered chapters with green completion check toggles, edit/delete actions (with confirmation), and empty state.
 3. **Add Chapter Sheet (`AddChapterBottomSheet`)**: Modal bottom sheet opened via the center `+` bottom nav button or from `BookDetailScreen`. Features close button, book dropdown selector (plus quick `"New Book"` action if no books exist), validated `Chapter Name` input, validated numeric `# Chapter Number` input, `"Mark as Completed"` switch, and full-width `"Add Chapter"` pill button (also supports editing existing chapters).
 4. **Progress (`ProgressScreen`)**: Segmented `Overall` / `By Book` pill switcher. `Overall` shows the percentage summary card with flat solid cumulative curve, `Completed / Remaining / Total` row, and `Study Trend` 7-day bar chart (`This Week` / `Last Week` dropdown). `By Book` lists per-book progress cards.
-5. **More (`MoreScreen`)**: Settings screen with Daily Chapter Goal editor, Daily Study Reminder switch (handles Android 13+ `POST_NOTIFICATIONS` permission), Reminder Time picker (default 8:00 PM), and About section.
+5. **More (`MoreScreen`)**: Settings screen with Daily Chapter Goal editor, Daily Study Reminder switch (handles Android 13+ `POST_NOTIFICATIONS` permission), Reminder Time picker (default 8:00 PM), **Backup** section (`Export Data` via SAF `CreateDocument`, `Import Data` via SAF `OpenDocument` with validation + `Replace` / `Merge` confirmation dialog), and About section.
 6. **Bottom Navigation (`SyllabusBottomBar`)**: 5-slot white bar with hairline top border: `Home`, `Books`, circular indigo `+` button, `Progress`, and `More`.
 
 ---
@@ -164,21 +178,22 @@ app/src/main/java/com/example/
 ## 6. Current Progress Checklist
 
 ### Done
-- [x] Project Gradle configuration (`minSdk 26`, `applicationId`, Room, DataStore, Navigation Compose, Kotlin Serialization)
+- [x] Project Gradle configuration (`minSdk 26`, `applicationId`, Room, DataStore, Navigation Compose, Kotlin Serialization, Glance, WorkManager)
 - [x] Custom adaptive launcher icon and monochrome notification small icon
 - [x] Flat Material 3 design system (`Color.kt`, `Type.kt`, `Theme.kt`)
 - [x] Room database (`BookEntity`, `ChapterEntity`, `SyllabusDao`, `SyllabusDatabase`)
 - [x] DataStore preferences (`UserPreferencesRepository`) and reactive `SyllabusRepository`
 - [x] Daily reminder notifications (`NotificationHelper`, `StudyReminderScheduler`, `StudyReminderReceiver`, `BootCompletedReceiver`)
-- [x] `SyllabusViewModel` and `MainActivity` navigation host
+- [x] `SyllabusViewModel` and `MainActivity` navigation host (including optimistic chapter toggle state and `ON_RESUME` widget refresh)
 - [x] All screens & modals (`HomeScreen`, `BooksScreen`, `BookDetailScreen`, `AddChapterBottomSheet`, `ProgressScreen`, `MoreScreen`, `Dialogs`, `SyllabusBottomBar`)
-
-- [x] `compile_applet` build verification and `gradle :app:testDebugUnitTest` Robolectric test suite (Room DB, progress calculations, cascade delete, weekly trend, reminder scheduler)
-- [x] 5 Jetpack Glance Home-Screen Widgets (`Overview`, `Dark Progress`, `Today's Plan`, `Done Ring`, `Continue Studying`) with live Room data, WorkManager 30-min periodic refresh, bitmap rings/bars, preview images, and deep-link navigation
+- [x] 5 Jetpack Glance Home-Screen Widgets (`Overview`, `Dark Progress`, `Today's Plan`, `Done Ring`, `Continue Studying`) with lightweight aggregate queries, `LruCache` 300x300 ring bitmaps, pure-XML preview drawables, and deep-link navigation
 - [x] Static periwinkle wave background (`res/drawable-nodpi/bg_home_waves.xml`) applied behind `HomeScreen` with transparent edge-to-edge status bar
+- [x] Local Backup Export / Import (`BackupModels`, `BackupManager`, SAF pickers in `MoreScreen`, confirmation & error dialogs, atomic Room transaction import, widget & reminder resync)
+- [x] Instant Widget Refresh architecture (`WidgetUpdater.refreshAll` concurrent execution, `applicationScope` Flow observer with `debounce(50).distinctUntilChanged()`, start/resume/boot/date/time/timezone triggers, 30-min WorkManager fallback)
+- [x] `compile_applet` build verification and `gradle :app:testDebugUnitTest` Robolectric test suite (progress calculations, backup validation/replace/merge, widget summary queries, `LruCache` bitmap reuse, reminder scheduler)
 
 ### Pending
-- None (all core features, widgets, background update, and verifications complete)
+- None (all core features, widgets, backup export/import, instant widget updates, and verifications complete)
 
 ### Known Bugs
 - None identified.
@@ -255,13 +270,55 @@ Apply the design from Image 2 as the background of the in-app Home screen only.
 4. **Done Ring** (`2x2`, `widget_done_ring_info.xml`, `DoneRingWidget` / `DoneRingWidgetReceiver`): Solid `#EEF0FF` background with centered circular bitmap progress ring displaying overall `%` and `"Done"`.
 5. **Continue Studying** (`4x1`, `widget_continue_studying_info.xml`, `ContinueStudyingWidget` / `ContinueStudyingWidgetReceiver`): Book tile, active book name, next incomplete chapter, progress bar + `%`, and circular play button opening that book's chapter list.
 
-- **Auto-Refresh**: `WidgetUpdater.updateAllWidgets()` invokes `GlanceAppWidget.updateAll` immediately after repository DB/goal mutations, and `WidgetRefreshWorker` runs periodically every 30 minutes via WorkManager (`ExistingPeriodicWorkPolicy.KEEP`).
+- **Auto-Refresh**: `WidgetUpdater.refreshAll()` runs `updateAll()` across all 5 Glance widgets concurrently on `Dispatchers.Default` immediately after DB writes and settings updates; `SyllabusApplication` also observes `combine(books, chapters, prefs).debounce(50).distinctUntilChanged()` to guarantee rapid widget sync. Refresh triggers cover app startup, `Lifecycle.Event.ON_RESUME`, `BOOT_COMPLETED`, `ACTION_DATE_CHANGED`, `ACTION_TIME_CHANGED`, and `ACTION_TIMEZONE_CHANGED`, with `WidgetRefreshWorker` (30-min `ExistingPeriodicWorkPolicy.KEEP`) as periodic backup.
+- **Fast Rendering & Optimistic UI**: `SyllabusDao` provides aggregate `COUNT`/`SUM` queries (`getWidgetAggregateStats`, `getBookChapterCounts`) and `WidgetBitmapHelper` caches `300x300` ring bitmaps in an `LruCache(128)` keyed by percentage, dimensions, and colors. Chapter toggles update `SyllabusViewModel` optimistically right before the Room write and widget refresh.
 
 ### Home Screen Background
 - `res/drawable-nodpi/bg_home_waves.xml` rendered with `Image(..., contentScale = ContentScale.Crop)` behind `HomeScreen` content and extending behind the transparent edge-to-edge status bar (`SystemBarStyle.light(TRANSPARENT, TRANSPARENT)`). Other screens keep `#F6F7FB`.
 
 ---
 
-## 9. Resume Prompt
+## 9. Backup JSON Schema & Instant Widget Update Specification
+
+### Update Summary
+1. **Data Export / Import (Local Backup)**: Added a `"Backup"` section inside `MoreScreen` with `"Export Data"` (`ActivityResultContracts.CreateDocument`, `application/json`, suggested filename `syllabus_tracker_backup_YYYY-MM-DD.json`, `Dispatchers.IO`, snackbar `"Backup saved"`) and `"Import Data"` (`ActivityResultContracts.OpenDocument`). Imported files are size-checked (`<= 20 MB`) and strictly validated (`schemaVersion == 1`, required keys, positive/valid IDs and ranges, no broken `bookId` references) before prompting a plain confirmation dialog (`Replace existing data`, `Merge with existing data`, `Cancel`), running in a single Room `withTransaction` block, restoring preferences/reminder schedule, refreshing all widgets, and showing snackbar `"Data imported"`.
+2. **Instant Widget Updates (Milliseconds)**: Replaced full-table widget reads with lightweight aggregate DAO queries, added `LruCache` for 300x300 progress ring bitmaps, ran all 5 `GlanceAppWidget.updateAll` calls concurrently inside `applicationScope` (`Dispatchers.Default`) immediately on DB mutations and combined debounced Flow changes, added start/`ON_RESUME`/boot/`DATE_CHANGED`/`TIME_CHANGED`/`TIMEZONE_CHANGED` triggers, and applied optimistic in-app chapter toggling.
+
+### Backup JSON Schema (`schemaVersion = 1`)
+```json
+{
+  "appVersion": "1.0",
+  "schemaVersion": 1,
+  "exportedAt": 1763320000000,
+  "settings": {
+    "dailyGoal": 2,
+    "reminderEnabled": true,
+    "reminderHour": 20,
+    "reminderMinute": 0
+  },
+  "books": [
+    {
+      "id": 1,
+      "name": "Mathematics",
+      "createdAt": 1763310000000
+    }
+  ],
+  "chapters": [
+    {
+      "id": 10,
+      "bookId": 1,
+      "name": "Algebra",
+      "number": 1,
+      "isCompleted": true,
+      "completedAt": 1763315000000,
+      "createdAt": 1763310000000
+    }
+  ]
+}
+```
+
+---
+
+## 10. Resume Prompt
 
 Read this file fully and continue building this exact app from the pending items without changing the design.

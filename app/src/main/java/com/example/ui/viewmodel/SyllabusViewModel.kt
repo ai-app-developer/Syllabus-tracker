@@ -1,9 +1,14 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.SyllabusApplication
+import com.example.data.backup.BackupImportMode
+import com.example.data.backup.BackupManager
+import com.example.data.backup.BackupValidationResult
+import com.example.data.backup.SyllabusBackup
 import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
 import com.example.data.preferences.UserPreferences
@@ -13,14 +18,21 @@ import com.example.data.repository.StudyTrendPeriod
 import com.example.data.repository.SyllabusRepository
 import com.example.data.repository.SyllabusSnapshot
 import com.example.notifications.StudyReminderScheduler
+import com.example.widgets.WidgetUpdater
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 enum class BookFilter {
   ALL,
@@ -85,6 +97,8 @@ data class SyllabusUiState(
   val deleteConfirm: DeleteConfirmState = DeleteConfirmState.None,
   val isDailyGoalDialogOpen: Boolean = false,
   val isTimePickerOpen: Boolean = false,
+  val pendingBackupImport: SyllabusBackup? = null,
+  val backupErrorMessage: String? = null,
 ) {
   val filteredBooks: List<BookProgressSummary>
     get() {
@@ -120,6 +134,8 @@ private data class ScreenControlsState(
   val deleteConfirm: DeleteConfirmState = DeleteConfirmState.None,
   val isDailyGoalDialogOpen: Boolean = false,
   val isTimePickerOpen: Boolean = false,
+  val pendingBackupImport: SyllabusBackup? = null,
+  val backupErrorMessage: String? = null,
 )
 
 class SyllabusViewModel(application: Application) : AndroidViewModel(application) {
@@ -127,9 +143,18 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
   private val repository: SyllabusRepository = app.syllabusRepository
 
   private val controls = MutableStateFlow(ScreenControlsState())
+  private val optimisticChapterToggles =
+    MutableStateFlow<Map<Long, Pair<Boolean, Long?>>>(emptyMap())
+
+  private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+  val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
 
   val uiState: StateFlow<SyllabusUiState> =
-    combine(repository.snapshot, controls) { snapshot, ctrl ->
+    combine(repository.snapshot, controls, optimisticChapterToggles) {
+        baseSnapshot,
+        ctrl,
+        optimisticMap ->
+        val snapshot = applyOptimisticToggles(baseSnapshot, optimisticMap)
         val weeklyTrend =
           SyllabusRepository.computeWeeklyTrend(snapshot.allChapters, ctrl.trendPeriod)
         val cumulativeSeries =
@@ -151,6 +176,8 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
           deleteConfirm = ctrl.deleteConfirm,
           isDailyGoalDialogOpen = ctrl.isDailyGoalDialogOpen,
           isTimePickerOpen = ctrl.isTimePickerOpen,
+          pendingBackupImport = ctrl.pendingBackupImport,
+          backupErrorMessage = ctrl.backupErrorMessage,
         )
       }
       .stateIn(
@@ -159,13 +186,74 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
         initialValue = SyllabusUiState(),
       )
 
+  private fun applyOptimisticToggles(
+    base: SyllabusSnapshot,
+    overrides: Map<Long, Pair<Boolean, Long?>>,
+  ): SyllabusSnapshot {
+    if (overrides.isEmpty()) return base
+    val updatedChapters =
+      base.allChapters.map { ch ->
+        val override = overrides[ch.id]
+        if (override != null) {
+          ch.copy(isCompleted = override.first, completedAt = override.second)
+        } else {
+          ch
+        }
+      }
+    val chaptersByBook = updatedChapters.groupBy { it.bookId }
+    val updatedBooks =
+      base.books.map { summary ->
+        val bookChapters =
+          chaptersByBook[summary.book.id].orEmpty().sortedWith(compareBy({ it.number }, { it.id }))
+        summary.copy(
+          totalChapters = bookChapters.size,
+          completedChapters = bookChapters.count { it.isCompleted },
+          nextIncompleteChapter = bookChapters.firstOrNull { !it.isCompleted },
+        )
+      }
+    val totalChapters = updatedChapters.size
+    val completedChapters = updatedChapters.count { it.isCompleted }
+    val remainingChapters = (totalChapters - completedChapters).coerceAtLeast(0)
+    val overallPercentage =
+      if (totalChapters == 0) 0 else ((completedChapters * 100f) / totalChapters).roundToInt()
+
+    return base.copy(
+      books = updatedBooks,
+      allChapters = updatedChapters,
+      totalChapters = totalChapters,
+      completedChapters = completedChapters,
+      remainingChapters = remainingChapters,
+      overallPercentage = overallPercentage,
+      continueStudyingBook =
+        updatedBooks.firstOrNull { it.book.id == base.continueStudyingBook?.book?.id }
+          ?: base.continueStudyingBook,
+    )
+  }
+
   fun observeBookById(bookId: Long): Flow<BookEntity?> = repository.observeBookById(bookId)
 
   fun observeChaptersForBook(bookId: Long): Flow<List<ChapterEntity>> =
-    repository.observeChaptersForBook(bookId)
+    combine(repository.observeChaptersForBook(bookId), optimisticChapterToggles) {
+      chapters,
+      overrides ->
+      if (overrides.isEmpty()) {
+        chapters
+      } else {
+        chapters.map { ch ->
+          val override = overrides[ch.id]
+          if (override != null) {
+            ch.copy(isCompleted = override.first, completedAt = override.second)
+          } else {
+            ch
+          }
+        }
+      }
+    }
 
   fun markBookOpened(bookId: Long) {
-    viewModelScope.launch { repository.markBookOpened(bookId) }
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) { repository.markBookOpened(bookId) }
+    }
   }
 
   fun toggleSearchActive() {
@@ -254,14 +342,16 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
   fun confirmDelete(onBookDeleted: (() -> Unit)? = null) {
     val current = controls.value.deleteConfirm
     controls.update { it.copy(deleteConfirm = DeleteConfirmState.None) }
-    viewModelScope.launch {
-      when (current) {
-        is DeleteConfirmState.DeleteBook -> {
-          repository.deleteBook(current.book.id)
-          onBookDeleted?.invoke()
+    if (current is DeleteConfirmState.DeleteBook) {
+      onBookDeleted?.invoke()
+    }
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) {
+        when (current) {
+          is DeleteConfirmState.DeleteBook -> repository.deleteBook(current.book.id)
+          is DeleteConfirmState.DeleteChapter -> repository.deleteChapter(current.chapter.id)
+          DeleteConfirmState.None -> Unit
         }
-        is DeleteConfirmState.DeleteChapter -> repository.deleteChapter(current.chapter.id)
-        DeleteConfirmState.None -> Unit
       }
     }
   }
@@ -270,16 +360,18 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
     val trimmed = name.trim()
     if (trimmed.isEmpty()) return
     controls.update { it.copy(bookFormDialog = BookFormDialogState()) }
-    viewModelScope.launch {
-      if (editingBook == null) {
-        val newId = repository.addBook(trimmed)
-        if (controls.value.addChapterSheet.isOpen) {
-          controls.update {
-            it.copy(addChapterSheet = it.addChapterSheet.copy(preselectedBookId = newId))
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) {
+        if (editingBook == null) {
+          val newId = repository.addBook(trimmed)
+          if (controls.value.addChapterSheet.isOpen) {
+            controls.update {
+              it.copy(addChapterSheet = it.addChapterSheet.copy(preselectedBookId = newId))
+            }
           }
+        } else {
+          repository.updateBook(editingBook.copy(name = trimmed))
         }
-      } else {
-        repository.updateBook(editingBook.copy(name = trimmed))
       }
     }
   }
@@ -294,20 +386,37 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
     val trimmed = name.trim()
     if (trimmed.isEmpty() || number <= 0) return
     controls.update { it.copy(addChapterSheet = AddChapterSheetState()) }
-    viewModelScope.launch {
-      if (editingChapter == null) {
-        repository.addChapter(bookId, trimmed, number, isCompleted)
-      } else {
-        repository.updateChapter(
-          editingChapter.copy(bookId = bookId, name = trimmed, number = number),
-          isCompleted = isCompleted,
-        )
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) {
+        if (editingChapter == null) {
+          repository.addChapter(bookId, trimmed, number, isCompleted)
+        } else {
+          repository.updateChapter(
+            editingChapter.copy(bookId = bookId, name = trimmed, number = number),
+            isCompleted = isCompleted,
+          )
+        }
       }
     }
   }
 
   fun toggleChapterCompleted(chapter: ChapterEntity) {
-    viewModelScope.launch { repository.toggleChapterCompleted(chapter) }
+    val nextState = !chapter.isCompleted
+    val nextCompletedAt = if (nextState) System.currentTimeMillis() else null
+    optimisticChapterToggles.update { it + (chapter.id to (nextState to nextCompletedAt)) }
+    app.applicationScope.launch {
+      try {
+        withContext(Dispatchers.IO) {
+          repository.toggleChapterCompleted(
+            chapter = chapter,
+            targetCompleted = nextState,
+            targetCompletedAt = nextCompletedAt,
+          )
+        }
+      } finally {
+        optimisticChapterToggles.update { it - chapter.id }
+      }
+    }
   }
 
   fun openDailyGoalDialog() {
@@ -320,7 +429,9 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
 
   fun saveDailyGoal(goal: Int) {
     controls.update { it.copy(isDailyGoalDialogOpen = false) }
-    viewModelScope.launch { repository.setDailyGoal(goal) }
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) { repository.setDailyGoal(goal) }
+    }
   }
 
   fun openTimePicker() {
@@ -332,8 +443,8 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun setReminderEnabled(enabled: Boolean) {
-    viewModelScope.launch {
-      repository.setReminderEnabled(enabled)
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) { repository.setReminderEnabled(enabled) }
       val prefs = uiState.value.snapshot.preferences
       if (enabled) {
         StudyReminderScheduler.scheduleDailyReminder(
@@ -349,10 +460,87 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
 
   fun saveReminderTime(hour: Int, minute: Int) {
     controls.update { it.copy(isTimePickerOpen = false) }
-    viewModelScope.launch {
-      repository.setReminderTime(hour, minute)
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) { repository.setReminderTime(hour, minute) }
       if (uiState.value.snapshot.preferences.reminderEnabled) {
         StudyReminderScheduler.scheduleDailyReminder(app, hour, minute)
+      }
+    }
+  }
+
+  fun exportBackupToUri(uri: Uri) {
+    app.applicationScope.launch(Dispatchers.IO) {
+      runCatching {
+        val versionName =
+          runCatching {
+              app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "1.0"
+            }
+            .getOrDefault("1.0")
+        val json = repository.exportBackupJson(versionName)
+        BackupManager.writeTextToUri(app, uri, json)
+      }.onSuccess {
+        _snackbarMessages.tryEmit("Backup saved")
+      }.onFailure { err ->
+        controls.update {
+          it.copy(backupErrorMessage = err.message ?: "Failed to export backup file.")
+        }
+      }
+    }
+  }
+
+  fun inspectBackupUri(uri: Uri) {
+    app.applicationScope.launch(Dispatchers.IO) {
+      val readResult = runCatching { BackupManager.readTextFromUri(app, uri) }
+      val raw =
+        readResult.getOrElse { err ->
+          controls.update {
+            it.copy(backupErrorMessage = err.message ?: "Unable to read selected backup file.")
+          }
+          return@launch
+        }
+
+      when (val validation = BackupManager.parseAndValidate(raw)) {
+        is BackupValidationResult.Valid -> {
+          controls.update { it.copy(pendingBackupImport = validation.backup) }
+        }
+        is BackupValidationResult.Invalid -> {
+          controls.update { it.copy(backupErrorMessage = validation.message) }
+        }
+      }
+    }
+  }
+
+  fun dismissImportConfirm() {
+    controls.update { it.copy(pendingBackupImport = null) }
+  }
+
+  fun dismissBackupError() {
+    controls.update { it.copy(backupErrorMessage = null) }
+  }
+
+  fun confirmImport(mode: BackupImportMode) {
+    val backup = controls.value.pendingBackupImport ?: return
+    controls.update { it.copy(pendingBackupImport = null) }
+    app.applicationScope.launch {
+      runCatching {
+        val restoredPrefs =
+          withContext(Dispatchers.IO) { repository.importBackup(backup, mode) }
+        if (restoredPrefs.reminderEnabled) {
+          StudyReminderScheduler.scheduleDailyReminder(
+            context = app,
+            hour = restoredPrefs.reminderHour,
+            minute = restoredPrefs.reminderMinute,
+          )
+        } else {
+          StudyReminderScheduler.cancelReminder(app)
+        }
+        WidgetUpdater.refreshAll(app)
+      }.onSuccess {
+        _snackbarMessages.tryEmit("Data imported")
+      }.onFailure { err ->
+        controls.update {
+          it.copy(backupErrorMessage = err.message ?: "Failed to import backup.")
+        }
       }
     }
   }

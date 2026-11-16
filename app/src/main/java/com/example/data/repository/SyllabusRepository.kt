@@ -1,5 +1,8 @@
 package com.example.data.repository
 
+import com.example.data.backup.BackupImportMode
+import com.example.data.backup.BackupManager
+import com.example.data.backup.SyllabusBackup
 import com.example.data.local.dao.SyllabusDao
 import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
@@ -32,6 +35,31 @@ data class BookProgressSummary(
     get() = totalChapters > 0 && completedChapters == totalChapters
 }
 
+data class WidgetActiveBook(
+  val id: Long,
+  val name: String,
+  val totalChapters: Int,
+  val completedChapters: Int,
+  val nextChapterNumber: Int?,
+  val nextChapterName: String?,
+) {
+  val percentage: Int
+    get() = if (totalChapters == 0) 0 else ((completedChapters * 100f) / totalChapters).roundToInt()
+
+  val progressFraction: Float
+    get() = if (totalChapters == 0) 0f else completedChapters.toFloat() / totalChapters.toFloat()
+}
+
+data class WidgetSummaryData(
+  val totalBooks: Int,
+  val totalChapters: Int,
+  val completedChapters: Int,
+  val overallPercentage: Int,
+  val completedToday: Int,
+  val dailyGoal: Int,
+  val activeBook: WidgetActiveBook?,
+)
+
 data class DailyStudyCount(
   val date: LocalDate,
   val dayLabel: String,
@@ -60,6 +88,7 @@ data class SyllabusSnapshot(
 class SyllabusRepository(
   private val dao: SyllabusDao,
   private val prefsRepo: UserPreferencesRepository,
+  private val runInTransaction: suspend (suspend () -> Unit) -> Unit = { block -> block() },
   private val onDataChanged: suspend () -> Unit = {},
 ) {
   val snapshot: Flow<SyllabusSnapshot> =
@@ -128,6 +157,190 @@ class SyllabusRepository(
 
   fun observeChaptersForBook(bookId: Long): Flow<List<ChapterEntity>> = dao.observeChaptersForBook(bookId)
 
+  suspend fun loadWidgetSummary(): WidgetSummaryData {
+    val prefs = prefsRepo.getCurrentPreferences()
+    val zone = ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val startOfTodayMillis = today.atStartOfDay(zone).toInstant().toEpochMilli()
+    val endOfTodayMillis = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+    val stats = dao.getWidgetAggregateStats(startOfTodayMillis, endOfTodayMillis)
+    val overallPercentage =
+      if (stats.totalChapters == 0) 0
+      else ((stats.completedChapters * 100f) / stats.totalChapters).roundToInt()
+
+    val activeBook =
+      if (stats.totalBooks == 0) {
+        null
+      } else {
+        val lastOpened =
+          if (prefs.lastOpenedBookId > 0L) dao.getBookByIdOnce(prefs.lastOpenedBookId) else null
+        val lastOpenedNext =
+          if (lastOpened != null) dao.getNextIncompleteChapterOnce(lastOpened.id) else null
+
+        val chosenBook: BookEntity?
+        val chosenNext: ChapterEntity?
+        if (lastOpened != null && lastOpenedNext != null) {
+          chosenBook = lastOpened
+          chosenNext = lastOpenedNext
+        } else {
+          val incompleteBook = dao.getFirstIncompleteBookOnce()
+          if (incompleteBook != null) {
+            chosenBook = incompleteBook
+            chosenNext = dao.getNextIncompleteChapterOnce(incompleteBook.id)
+          } else {
+            chosenBook = lastOpened ?: dao.getLatestBookOnce()
+            chosenNext = null
+          }
+        }
+
+        chosenBook?.let { book ->
+          val counts = dao.getBookChapterCounts(book.id)
+          WidgetActiveBook(
+            id = book.id,
+            name = book.name,
+            totalChapters = counts.totalChapters,
+            completedChapters = counts.completedChapters,
+            nextChapterNumber = chosenNext?.number,
+            nextChapterName = chosenNext?.name,
+          )
+        }
+      }
+
+    return WidgetSummaryData(
+      totalBooks = stats.totalBooks,
+      totalChapters = stats.totalChapters,
+      completedChapters = stats.completedChapters,
+      overallPercentage = overallPercentage,
+      completedToday = stats.completedToday,
+      dailyGoal = prefs.dailyGoal.coerceAtLeast(1),
+      activeBook = activeBook,
+    )
+  }
+
+  suspend fun exportBackupJson(appVersion: String): String {
+    val books = dao.getAllBooksOnce()
+    val chapters = dao.getAllChaptersOnce()
+    val prefs = prefsRepo.getCurrentPreferences()
+    return BackupManager.createBackupJson(
+      appVersion = appVersion,
+      settings = prefs,
+      books = books,
+      chapters = chapters,
+    )
+  }
+
+  suspend fun importBackup(
+    backup: SyllabusBackup,
+    mode: BackupImportMode,
+  ): UserPreferences {
+    var firstInsertedBookId = -1L
+
+    runInTransaction {
+      when (mode) {
+        BackupImportMode.REPLACE -> {
+          dao.deleteAllChapters()
+          dao.deleteAllBooks()
+
+          val bookIdMap = HashMap<Long, Long>(backup.books.size)
+          for (book in backup.books) {
+            val insertedId =
+              dao.insertBook(
+                BookEntity(
+                  id = 0L,
+                  name = book.name.trim(),
+                  createdAt = book.createdAt,
+                )
+              )
+            if (firstInsertedBookId <= 0L) {
+              firstInsertedBookId = insertedId
+            }
+            bookIdMap[book.id] = insertedId
+          }
+
+          for (chapter in backup.chapters) {
+            val targetBookId = bookIdMap[chapter.bookId] ?: continue
+            dao.insertChapter(
+              ChapterEntity(
+                id = 0L,
+                bookId = targetBookId,
+                name = chapter.name.trim(),
+                number = chapter.number,
+                isCompleted = chapter.isCompleted,
+                completedAt =
+                  if (chapter.isCompleted) (chapter.completedAt ?: chapter.createdAt) else null,
+              )
+            )
+          }
+        }
+        BackupImportMode.MERGE -> {
+          val existingBooks = dao.getAllBooksOnce()
+          val existingChapters = dao.getAllChaptersOnce()
+
+          val bookIdByNormalizedName = HashMap<String, Long>(existingBooks.size + backup.books.size)
+          for (existing in existingBooks) {
+            bookIdByNormalizedName.putIfAbsent(existing.name.trim().lowercase(), existing.id)
+          }
+
+          val existingChapterKeys = HashSet<Pair<Long, Int>>(existingChapters.size + backup.chapters.size)
+          for (ch in existingChapters) {
+            existingChapterKeys.add(ch.bookId to ch.number)
+          }
+
+          val backupBookIdToTargetId = HashMap<Long, Long>(backup.books.size)
+          for (book in backup.books) {
+            val key = book.name.trim().lowercase()
+            val targetBookId =
+              bookIdByNormalizedName[key]
+                ?: dao.insertBook(
+                  BookEntity(
+                    id = 0L,
+                    name = book.name.trim(),
+                    createdAt = book.createdAt,
+                  )
+                ).also { newId ->
+                  bookIdByNormalizedName[key] = newId
+                }
+            if (firstInsertedBookId <= 0L) {
+              firstInsertedBookId = targetBookId
+            }
+            backupBookIdToTargetId[book.id] = targetBookId
+          }
+
+          for (chapter in backup.chapters) {
+            val targetBookId = backupBookIdToTargetId[chapter.bookId] ?: continue
+            val dedupKey = targetBookId to chapter.number
+            if (!existingChapterKeys.add(dedupKey)) {
+              continue
+            }
+            dao.insertChapter(
+              ChapterEntity(
+                id = 0L,
+                bookId = targetBookId,
+                name = chapter.name.trim(),
+                number = chapter.number,
+                isCompleted = chapter.isCompleted,
+                completedAt =
+                  if (chapter.isCompleted) (chapter.completedAt ?: chapter.createdAt) else null,
+              )
+            )
+          }
+        }
+      }
+    }
+
+    prefsRepo.setDailyGoal(backup.settings.dailyGoal)
+    prefsRepo.setReminderEnabled(backup.settings.reminderEnabled)
+    prefsRepo.setReminderTime(backup.settings.reminderHour, backup.settings.reminderMinute)
+    if (mode == BackupImportMode.REPLACE) {
+      prefsRepo.setLastOpenedBookId(firstInsertedBookId)
+    }
+
+    val updatedPrefs = prefsRepo.getCurrentPreferences()
+    onDataChanged()
+    return updatedPrefs
+  }
+
   suspend fun addBook(name: String): Long {
     val id = dao.insertBook(BookEntity(name = name.trim()))
     onDataChanged()
@@ -177,10 +390,12 @@ class SyllabusRepository(
     onDataChanged()
   }
 
-  suspend fun toggleChapterCompleted(chapter: ChapterEntity) {
-    val nextState = !chapter.isCompleted
-    val completedAt = if (nextState) System.currentTimeMillis() else null
-    dao.updateChapterCompletion(chapter.id, nextState, completedAt)
+  suspend fun toggleChapterCompleted(
+    chapter: ChapterEntity,
+    targetCompleted: Boolean = !chapter.isCompleted,
+    targetCompletedAt: Long? = if (targetCompleted) System.currentTimeMillis() else null,
+  ) {
+    dao.updateChapterCompletion(chapter.id, targetCompleted, targetCompletedAt)
     prefsRepo.setLastOpenedBookId(chapter.bookId)
     onDataChanged()
   }

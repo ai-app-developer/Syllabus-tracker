@@ -9,6 +9,18 @@ import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
 import kotlinx.coroutines.flow.Flow
 
+data class WidgetAggregateStats(
+  val totalBooks: Int,
+  val totalChapters: Int,
+  val completedChapters: Int,
+  val completedToday: Int,
+)
+
+data class BookChapterCounts(
+  val totalChapters: Int,
+  val completedChapters: Int,
+)
+
 @Dao
 interface SyllabusDao {
   @Query("SELECT * FROM books ORDER BY createdAt DESC, id DESC")
@@ -22,6 +34,59 @@ interface SyllabusDao {
 
   @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY number ASC, id ASC")
   fun observeChaptersForBook(bookId: Long): Flow<List<ChapterEntity>>
+
+  @Query("SELECT * FROM books ORDER BY createdAt DESC, id DESC")
+  suspend fun getAllBooksOnce(): List<BookEntity>
+
+  @Query("SELECT * FROM chapters ORDER BY number ASC, id ASC")
+  suspend fun getAllChaptersOnce(): List<ChapterEntity>
+
+  @Query(
+    """
+    SELECT
+      (SELECT COUNT(*) FROM books) AS totalBooks,
+      COUNT(*) AS totalChapters,
+      COALESCE(SUM(CASE WHEN isCompleted = 1 THEN 1 ELSE 0 END), 0) AS completedChapters,
+      COALESCE(SUM(CASE WHEN isCompleted = 1 AND completedAt IS NOT NULL AND completedAt >= :startOfTodayMillis AND completedAt < :endOfTodayMillis THEN 1 ELSE 0 END), 0) AS completedToday
+    FROM chapters
+    """
+  )
+  suspend fun getWidgetAggregateStats(
+    startOfTodayMillis: Long,
+    endOfTodayMillis: Long,
+  ): WidgetAggregateStats
+
+  @Query("SELECT * FROM books WHERE id = :bookId LIMIT 1")
+  suspend fun getBookByIdOnce(bookId: Long): BookEntity?
+
+  @Query(
+    """
+    SELECT b.* FROM books b
+    WHERE EXISTS (SELECT 1 FROM chapters c WHERE c.bookId = b.id AND c.isCompleted = 0)
+    ORDER BY b.createdAt DESC, b.id DESC
+    LIMIT 1
+    """
+  )
+  suspend fun getFirstIncompleteBookOnce(): BookEntity?
+
+  @Query("SELECT * FROM books ORDER BY createdAt DESC, id DESC LIMIT 1")
+  suspend fun getLatestBookOnce(): BookEntity?
+
+  @Query(
+    """
+    SELECT
+      COUNT(*) AS totalChapters,
+      COALESCE(SUM(CASE WHEN isCompleted = 1 THEN 1 ELSE 0 END), 0) AS completedChapters
+    FROM chapters
+    WHERE bookId = :bookId
+    """
+  )
+  suspend fun getBookChapterCounts(bookId: Long): BookChapterCounts
+
+  @Query(
+    "SELECT * FROM chapters WHERE bookId = :bookId AND isCompleted = 0 ORDER BY number ASC, id ASC LIMIT 1"
+  )
+  suspend fun getNextIncompleteChapterOnce(bookId: Long): ChapterEntity?
 
   @Query("SELECT COUNT(*) FROM chapters")
   suspend fun getTotalChapterCount(): Int
@@ -39,6 +104,12 @@ interface SyllabusDao {
 
   @Query("DELETE FROM books WHERE id = :bookId")
   suspend fun deleteBookById(bookId: Long)
+
+  @Query("DELETE FROM chapters")
+  suspend fun deleteAllChapters()
+
+  @Query("DELETE FROM books")
+  suspend fun deleteAllBooks()
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun insertChapter(chapter: ChapterEntity): Long

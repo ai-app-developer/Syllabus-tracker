@@ -49,8 +49,8 @@ class ContinueStudyingWidget : GlanceAppWidget() {
   override val sizeMode: SizeMode = SizeMode.Exact
 
   override suspend fun provideGlance(context: Context, id: GlanceId) {
-    val snapshot = WidgetBitmapHelper.loadSnapshot(context)
-    val activeBook = snapshot.continueStudyingBook
+    val snapshot = WidgetBitmapHelper.loadWidgetData(context)
+    val activeBook = snapshot.activeBook
     val fraction = activeBook?.progressFraction ?: 0f
     val bookPercent = activeBook?.percentage ?: 0
 
@@ -68,7 +68,7 @@ class ContinueStudyingWidget : GlanceAppWidget() {
         WidgetIntents.createActivityIntent(
           context,
           WidgetIntents.ACTION_OPEN_BOOK,
-          activeBook.book.id,
+          activeBook.id,
         )
       } else {
         WidgetIntents.createActivityIntent(context, WidgetIntents.ACTION_OPEN_HOME)
@@ -127,10 +127,10 @@ class ContinueStudyingWidget : GlanceAppWidget() {
             }
           }
         } else {
-          val nextChapter = activeBook.nextIncompleteChapter
           val chapterSubtitle =
             when {
-              nextChapter != null -> "Chapter ${nextChapter.number}: ${nextChapter.name}"
+              activeBook.nextChapterNumber != null && activeBook.nextChapterName != null ->
+                "Chapter ${activeBook.nextChapterNumber}: ${activeBook.nextChapterName}"
               activeBook.totalChapters > 0 -> "All ${activeBook.totalChapters} chapters completed"
               else -> "No chapters yet"
             }
@@ -157,7 +157,7 @@ class ContinueStudyingWidget : GlanceAppWidget() {
 
             Column(modifier = GlanceModifier.defaultWeight()) {
               Text(
-                text = activeBook.book.name,
+                text = activeBook.name,
                 style =
                   TextStyle(
                     color = ColorProvider(Color(0xFF1A1A2E)),

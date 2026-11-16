@@ -5,22 +5,49 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.util.LruCache
 import com.example.SyllabusApplication
-import com.example.data.repository.SyllabusSnapshot
+import com.example.data.repository.WidgetSummaryData
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 object WidgetBitmapHelper {
-  suspend fun loadSnapshot(context: Context): SyllabusSnapshot =
+  private val ringBitmapCache = LruCache<String, Bitmap>(128)
+
+  suspend fun loadWidgetData(context: Context): WidgetSummaryData =
     withContext(Dispatchers.IO) {
       val app = context.applicationContext as SyllabusApplication
-      app.syllabusRepository.snapshot.first()
+      app.syllabusRepository.loadWidgetSummary()
     }
 
+  fun getOrDrawProgressRingBitmap(
+    percentage: Int,
+    sizePx: Int = 300,
+    strokePx: Float = 28f,
+    trackColor: Int,
+    arcColor: Int,
+  ): Bitmap {
+    val clampedPct = percentage.coerceIn(0, 100)
+    val key = "$clampedPct:$sizePx:${strokePx.toInt()}:$trackColor:$arcColor"
+    ringBitmapCache.get(key)?.let { cached ->
+      if (!cached.isRecycled) return cached
+    }
+
+    val drawn =
+      drawProgressRingBitmap(
+        sizePx = sizePx,
+        strokePx = strokePx,
+        fraction = clampedPct / 100f,
+        trackColor = trackColor,
+        arcColor = arcColor,
+      )
+    ringBitmapCache.put(key, drawn)
+    return drawn
+  }
+
   fun drawProgressRingBitmap(
-    sizePx: Int = 180,
-    strokePx: Float = 16f,
+    sizePx: Int = 300,
+    strokePx: Float = 28f,
     fraction: Float,
     trackColor: Int,
     arcColor: Int,

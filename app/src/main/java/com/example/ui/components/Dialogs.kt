@@ -48,6 +48,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.example.data.backup.BackupImportMode
+import com.example.data.backup.SyllabusBackup
 import com.example.data.local.entity.BookEntity
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.ErrorRed
@@ -57,6 +59,98 @@ import com.example.ui.theme.PrimaryIndigo
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.DeleteConfirmState
+
+@Composable
+fun ImportBackupConfirmDialog(
+  backup: SyllabusBackup,
+  onDismiss: () -> Unit,
+  onSelectMode: (BackupImportMode) -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = CardSurface,
+    shape = RoundedCornerShape(16.dp),
+    title = {
+      Text(
+        text = "Import Backup",
+        style = MaterialTheme.typography.titleLarge,
+        color = TextPrimary,
+      )
+    },
+    text = {
+      Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+          text =
+            "Found ${backup.books.size} ${if (backup.books.size == 1) "book" else "books"} and ${backup.chapters.size} ${if (backup.chapters.size == 1) "chapter" else "chapters"}. Choose how to import:",
+          style = MaterialTheme.typography.bodyMedium,
+          color = TextSecondary,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+          onClick = { onSelectMode(BackupImportMode.REPLACE) },
+          shape = RoundedCornerShape(12.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+          modifier = Modifier.fillMaxWidth().height(48.dp).testTag("import_replace_button"),
+        ) {
+          Text("Replace existing data", color = Color.White)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedButton(
+          onClick = { onSelectMode(BackupImportMode.MERGE) },
+          shape = RoundedCornerShape(12.dp),
+          border = BorderStroke(1.dp, HairlineBorder),
+          modifier = Modifier.fillMaxWidth().height(48.dp).testTag("import_merge_button"),
+        ) {
+          Text("Merge with existing data", color = TextPrimary)
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(
+        onClick = onDismiss,
+        modifier = Modifier.testTag("import_cancel_button"),
+      ) {
+        Text("Cancel", color = TextSecondary)
+      }
+    },
+  )
+}
+
+@Composable
+fun BackupErrorDialog(
+  message: String,
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = CardSurface,
+    shape = RoundedCornerShape(16.dp),
+    title = {
+      Text(
+        text = "Backup Error",
+        style = MaterialTheme.typography.titleLarge,
+        color = TextPrimary,
+      )
+    },
+    text = {
+      Text(
+        text = message,
+        style = MaterialTheme.typography.bodyMedium,
+        color = TextSecondary,
+      )
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        modifier = Modifier.testTag("backup_error_ok_button"),
+      ) {
+        Text("OK", color = Color.White)
+      }
+    },
+  )
+}
 
 @Composable
 fun BookFormDialog(

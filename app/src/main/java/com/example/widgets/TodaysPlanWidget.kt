@@ -49,8 +49,8 @@ class TodaysPlanWidget : GlanceAppWidget() {
   override val sizeMode: SizeMode = SizeMode.Exact
 
   override suspend fun provideGlance(context: Context, id: GlanceId) {
-    val snapshot = WidgetBitmapHelper.loadSnapshot(context)
-    val dailyGoal = snapshot.preferences.dailyGoal.coerceAtLeast(1)
+    val snapshot = WidgetBitmapHelper.loadWidgetData(context)
+    val dailyGoal = snapshot.dailyGoal.coerceAtLeast(1)
     val completedToday = snapshot.completedToday
     val fraction = (completedToday.toFloat() / dailyGoal.toFloat()).coerceIn(0f, 1f)
     val goalReached = completedToday >= dailyGoal

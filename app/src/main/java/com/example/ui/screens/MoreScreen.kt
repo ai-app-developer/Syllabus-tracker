@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,8 +28,10 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -64,6 +67,7 @@ import com.example.ui.theme.PrimaryIndigo
 import com.example.ui.theme.ProgressTrack
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -75,6 +79,8 @@ fun MoreScreen(
   onEditDailyGoal: () -> Unit,
   onToggleReminder: (Boolean) -> Unit,
   onEditReminderTime: () -> Unit,
+  onExportBackupUri: (Uri) -> Unit,
+  onImportBackupUri: (Uri) -> Unit,
 ) {
   val context = LocalContext.current
   var hasPermission by remember {
@@ -86,6 +92,20 @@ fun MoreScreen(
       hasPermission = granted
       if (granted) {
         onToggleReminder(true)
+      }
+    }
+
+  val exportLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+      if (uri != null) {
+        onExportBackupUri(uri)
+      }
+    }
+
+  val importLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        onImportBackupUri(uri)
       }
     }
 
@@ -312,6 +332,118 @@ fun MoreScreen(
               onClick = { permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
             ) {
               Text("Allow", color = PrimaryIndigo, fontWeight = FontWeight.SemiBold)
+            }
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(20.dp))
+
+      Text(
+        text = "Backup",
+        style = MaterialTheme.typography.labelLarge,
+        color = TextSecondary,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+
+      Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = CardSurface,
+        border = BorderStroke(1.dp, HairlineBorder),
+        shadowElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column {
+          Surface(
+            onClick = {
+              val dateStr = LocalDate.now().toString()
+              exportLauncher.launch("syllabus_tracker_backup_$dateStr.json")
+            },
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth().testTag("backup_export_row"),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LightIndigoTint),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Outlined.Upload,
+                  contentDescription = null,
+                  tint = PrimaryIndigo,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(14.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Export Data",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Text(
+                  text = "Save books, chapters, and settings as JSON",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Export data",
+                tint = TextSecondary,
+              )
+            }
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
+          Surface(
+            onClick = { importLauncher.launch(arrayOf("application/json")) },
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth().testTag("backup_import_row"),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LightIndigoTint),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Outlined.Download,
+                  contentDescription = null,
+                  tint = PrimaryIndigo,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(14.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Import Data",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Text(
+                  text = "Restore or merge from a JSON backup",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Import data",
+                tint = TextSecondary,
+              )
             }
           }
         }

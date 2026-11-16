@@ -50,7 +50,7 @@ class DarkProgressWidget : GlanceAppWidget() {
   override val sizeMode: SizeMode = SizeMode.Exact
 
   override suspend fun provideGlance(context: Context, id: GlanceId) {
-    val snapshot = WidgetBitmapHelper.loadSnapshot(context)
+    val snapshot = WidgetBitmapHelper.loadWidgetData(context)
     val fraction =
       if (snapshot.totalChapters == 0) 0f
       else snapshot.completedChapters.toFloat() / snapshot.totalChapters.toFloat()
@@ -65,7 +65,7 @@ class DarkProgressWidget : GlanceAppWidget() {
       )
 
     val homeIntent = WidgetIntents.createActivityIntent(context, WidgetIntents.ACTION_OPEN_PROGRESS)
-    val continueBookId = snapshot.continueStudyingBook?.book?.id
+    val continueBookId = snapshot.activeBook?.id
     val continueIntent =
       if (continueBookId != null) {
         WidgetIntents.createActivityIntent(context, WidgetIntents.ACTION_OPEN_BOOK, continueBookId)

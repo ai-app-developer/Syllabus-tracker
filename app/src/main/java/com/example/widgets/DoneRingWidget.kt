@@ -43,16 +43,13 @@ class DoneRingWidget : GlanceAppWidget() {
   override val sizeMode: SizeMode = SizeMode.Exact
 
   override suspend fun provideGlance(context: Context, id: GlanceId) {
-    val snapshot = WidgetBitmapHelper.loadSnapshot(context)
-    val fraction =
-      if (snapshot.totalChapters == 0) 0f
-      else snapshot.completedChapters.toFloat() / snapshot.totalChapters.toFloat()
+    val snapshot = WidgetBitmapHelper.loadWidgetData(context)
 
     val ringBitmap =
-      WidgetBitmapHelper.drawProgressRingBitmap(
-        sizePx = 180,
-        strokePx = 18f,
-        fraction = fraction,
+      WidgetBitmapHelper.getOrDrawProgressRingBitmap(
+        percentage = snapshot.overallPercentage,
+        sizePx = 300,
+        strokePx = 28f,
         trackColor = 0xFFD8DCFE.toInt(),
         arcColor = 0xFF4F46E5.toInt(),
       )

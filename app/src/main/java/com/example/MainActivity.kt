@@ -18,13 +18,20 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -36,10 +43,12 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.notifications.NotificationHelper
 import com.example.ui.components.AddChapterBottomSheet
+import com.example.ui.components.BackupErrorDialog
 import com.example.ui.components.BookFormDialog
 import com.example.ui.components.BottomTab
 import com.example.ui.components.ConfirmDeleteDialog
 import com.example.ui.components.DailyGoalDialog
+import com.example.ui.components.ImportBackupConfirmDialog
 import com.example.ui.components.ReminderTimePickerDialog
 import com.example.ui.components.SyllabusBottomBar
 import com.example.ui.navigation.BookDetailRoute
@@ -56,6 +65,8 @@ import com.example.ui.theme.AppBackground
 import com.example.ui.theme.SyllabusTrackerTheme
 import com.example.ui.viewmodel.SyllabusViewModel
 import com.example.widgets.WidgetIntents
+import com.example.widgets.WidgetUpdater
+import kotlinx.coroutines.launch
 
 data class PendingWidgetNav(
   val id: Long,
@@ -118,6 +129,28 @@ fun SyllabusApp(
   val currentDestination = backStackEntry?.destination
 
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val snackbarHostState = remember { SnackbarHostState() }
+
+  DisposableEffect(lifecycleOwner) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        val app = context.applicationContext as? SyllabusApplication
+        app?.applicationScope?.launch {
+          WidgetUpdater.refreshAll(app)
+        }
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
+  LaunchedEffect(viewModel) {
+    viewModel.snackbarMessages.collect { message ->
+      snackbarHostState.showSnackbar(message)
+    }
+  }
+
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { /* handled */ }
 
@@ -184,6 +217,7 @@ fun SyllabusApp(
   Scaffold(
     modifier = Modifier.fillMaxSize(),
     containerColor = AppBackground,
+    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     bottomBar = {
       if (!isBookDetail) {
         SyllabusBottomBar(
@@ -275,6 +309,8 @@ fun SyllabusApp(
           onEditDailyGoal = { viewModel.openDailyGoalDialog() },
           onToggleReminder = { viewModel.setReminderEnabled(it) },
           onEditReminderTime = { viewModel.openTimePicker() },
+          onExportBackupUri = { uri -> viewModel.exportBackupToUri(uri) },
+          onImportBackupUri = { uri -> viewModel.inspectBackupUri(uri) },
         )
       }
     }
@@ -337,6 +373,21 @@ fun SyllabusApp(
       initialMinute = uiState.snapshot.preferences.reminderMinute,
       onDismiss = { viewModel.closeTimePicker() },
       onConfirm = { hour, minute -> viewModel.saveReminderTime(hour, minute) },
+    )
+  }
+
+  uiState.pendingBackupImport?.let { backup ->
+    ImportBackupConfirmDialog(
+      backup = backup,
+      onDismiss = { viewModel.dismissImportConfirm() },
+      onSelectMode = { mode -> viewModel.confirmImport(mode) },
+    )
+  }
+
+  uiState.backupErrorMessage?.let { errorMsg ->
+    BackupErrorDialog(
+      message = errorMsg,
+      onDismiss = { viewModel.dismissBackupError() },
     )
   }
 }
