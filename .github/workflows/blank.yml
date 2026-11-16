@@ -45,11 +45,8 @@ jobs:
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
             "platform-tools" \
             "build-tools;36.0.0" \
+            "platforms;android-36" \
             "platforms;android-36.1"
-
-          if [ -d "$ANDROID_HOME/platforms/android-36.1" ] && [ ! -e "$ANDROID_HOME/platforms/android-36" ]; then
-            ln -s android-36.1 "$ANDROID_HOME/platforms/android-36"
-          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -66,10 +63,20 @@ jobs:
           fi
 
       - name: Build debug APK
+        shell: bash
         run: |
           gradle --version
-          gradle assembleDebug --no-daemon --max-workers=2 --stacktrace \
-            -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
+          set +e
+          gradle assembleDebug --no-daemon --max-workers=2 --console=plain \
+            -Dorg.gradle.configuration-cache=false \
+            -Dorg.gradle.jvmargs="-Xmx2560m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" \
+            2>&1 | tee gradle-build.log
+          BUILD_STATUS=${PIPESTATUS[0]}
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            echo "=== FAILURE SUMMARY ==="
+            grep -n -C 8 -E "FAILED|FAILURE:|What went wrong:|Caused by:|OutOfMemoryError" gradle-build.log | tail -n 80 || true
+            exit "$BUILD_STATUS"
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
