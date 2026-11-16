@@ -62,23 +62,88 @@ jobs:
               -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Build debug APK
+      - name: Collect environment info
         shell: bash
         run: |
-          gradle --version
+          mkdir -p logs
+          {
+            echo "=== Build Environment ==="
+            date -u
+            java -version 2>&1
+            gradle --version
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            ls -la "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" || true
+            ls -la debug.keystore .env.example gradle.properties app/build.gradle.kts || true
+          } | tee logs/env-info.txt
+
+      - name: Build debug APK
+        id: build_apk
+        shell: bash
+        run: |
+          mkdir -p logs
           set +e
-          gradle assembleDebug --no-daemon --max-workers=2 --console=plain \
+          gradle assembleDebug \
+            --no-daemon \
+            --no-build-cache \
+            --max-workers=2 \
+            --console=plain \
+            --stacktrace \
             -Dorg.gradle.configuration-cache=false \
             -Dorg.gradle.jvmargs="-Xmx2560m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" \
-            2>&1 | tee gradle-build.log
+            2>&1 | tee logs/gradle-build.log
           BUILD_STATUS=${PIPESTATUS[0]}
+
           if [ "$BUILD_STATUS" -ne 0 ]; then
-            echo "=== FAILURE SUMMARY ==="
-            grep -n -C 8 -E "FAILED|FAILURE:|What went wrong:|Caused by:|OutOfMemoryError" gradle-build.log | tail -n 80 || true
+            {
+              echo "=== FAILED TASK & ROOT CAUSE ==="
+              awk '
+                /^> Task .* FAILED$/ { show=1 }
+                /^FAILURE: Build failed with an exception\./ { show=1 }
+                /^\* Try:$/ { show=0 }
+                show { print }
+              ' logs/gradle-build.log
+
+              echo ""
+              echo "=== ROOT CAUSES ==="
+              awk '
+                /^\* Exception is:$/ { in_ex=1; head=0; print; next }
+                in_ex && head < 15 { print; head++; next }
+                in_ex && /^Caused by:/ { caused=6 }
+                in_ex && caused > 0 { print; caused-- }
+              ' logs/gradle-build.log
+            } | tee logs/failure-summary.txt
+
+            {
+              echo "## Build Failed (exit code $BUILD_STATUS)"
+              echo '```text'
+              cat logs/failure-summary.txt
+              echo '```'
+              echo "<details><summary>Full Gradle Build Log</summary>"
+              echo ""
+              echo '```text'
+              tail -n 200 logs/gradle-build.log
+              echo '```'
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            echo ""
+            echo "=========================================="
+            echo "BUILD ERROR LOG (READ THIS):"
+            echo "=========================================="
+            cat logs/failure-summary.txt
             exit "$BUILD_STATUS"
           fi
 
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SyllabusTracker-build-logs
+          path: logs/
+          retention-days: 14
+
       - name: Upload debug APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SyllabusTracker-debug-apk
