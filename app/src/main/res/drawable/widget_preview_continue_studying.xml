@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="480dp"
+    android:height="140dp"
+    android:viewportWidth="480"
+    android:viewportHeight="140">
+
+    <!-- Card background -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,4 H456 Q476,4 476,24 V116 Q476,136 456,136 H24 Q4,136 4,116 V24 Q4,4 24,4 Z"
+        android:strokeColor="#FFE5E7EB"
+        android:strokeWidth="2" />
+
+    <!-- Left icon tile -->
+    <path
+        android:fillColor="#FFEEF0FF"
+        android:pathData="M40,34 H92 Q108,34 108,50 V90 Q108,106 92,106 H40 Q24,106 24,90 V50 Q24,34 40,34 Z" />
+
+    <!-- Book icon inside tile -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M52,58 C57,55 61,55 66,58 V82 C61,79 57,79 52,82 Z M66,58 C71,55 75,55 80,58 V82 C75,79 71,79 66,82 Z"
+        android:strokeColor="#FF4F46E5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.8" />
+
+    <!-- Subject & Chapter bars -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M134,36 H274 Q280,36 280,42 V42 Q280,48 274,48 H134 Q128,48 128,42 V42 Q128,36 134,36 Z" />
+    <path
+        android:fillColor="#FF6B7280"
+        android:pathData="M133,62 H289 Q294,62 294,67 V67 Q294,72 289,72 H133 Q128,72 128,67 V67 Q128,62 133,62 Z" />
+
+    <!-- Progress track -->
+    <path
+        android:fillColor="#FFEEF0FF"
+        android:pathData="M134,90 H330 Q336,90 336,96 V96 Q336,102 330,102 H134 Q128,102 128,96 V96 Q128,90 134,90 Z" />
+    <!-- Progress fill (50%) -->
+    <path
+        android:fillColor="#FF4F46E5"
+        android:pathData="M134,90 H232 Q238,90 238,96 V96 Q238,102 232,102 H134 Q128,102 128,96 V96 Q128,90 134,90 Z" />
+
+    <!-- Percent label bar -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M356,90 H390 Q395,90 395,96 V96 Q395,102 390,102 H356 Q351,102 351,96 V96 Q351,90 356,90 Z" />
+
+    <!-- Play button circle -->
+    <path
+        android:fillColor="#FFEEF0FF"
+        android:pathData="M430,44 A26,26 0 1,1 430,96 A26,26 0 1,1 430,44 Z" />
+    <!-- Play triangle -->
+    <path
+        android:fillColor="#FF4F46E5"
+        android:pathData="M423,58 L442,70 L423,82 Z" />
+</vector>

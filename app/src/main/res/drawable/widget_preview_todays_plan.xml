@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="360dp"
+    android:height="200dp"
+    android:viewportWidth="360"
+    android:viewportHeight="200">
+
+    <!-- Card background -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M24,4 H336 Q356,4 356,24 V176 Q356,196 336,196 H24 Q4,196 4,176 V24 Q4,4 24,4 Z"
+        android:strokeColor="#FFE5E7EB"
+        android:strokeWidth="2" />
+
+    <!-- Calendar icon -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M26,28 H44 Q46,28 46,30 V44 Q46,46 44,46 H26 Q24,46 24,44 V30 Q24,28 26,28 Z M24,34 H46 M30,24 V30 M40,24 V30"
+        android:strokeColor="#FF4F46E5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.5" />
+
+    <!-- Header bar -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M64,31 H196 Q202,31 202,37 V37 Q202,43 196,43 H64 Q58,43 58,37 V37 Q58,31 64,31 Z" />
+
+    <!-- Chevron -->
+    <path
+        android:pathData="M324,29 L333,37 L324,45"
+        android:strokeColor="#FF1A1A2E"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.6" />
+
+    <!-- Checkbox circle -->
+    <path
+        android:pathData="M36,86 A13,13 0 1,1 36,112 A13,13 0 1,1 36,86 Z"
+        android:strokeColor="#FFC4C8D4"
+        android:strokeWidth="2.5" />
+
+    <!-- Goal bar -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M68,94 H254 Q259,94 259,99 V99 Q259,104 254,104 H68 Q63,104 63,99 V99 Q63,94 68,94 Z" />
+
+    <!-- Progress track -->
+    <path
+        android:fillColor="#FFEEF0FF"
+        android:pathData="M30,148 H274 Q280,148 280,154 V154 Q280,160 274,160 H30 Q24,160 24,154 V154 Q24,148 30,148 Z" />
+
+    <!-- Progress count bar -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M302,148 H332 Q336,148 336,154 V154 Q336,160 332,160 H302 Q298,160 298,154 V154 Q298,148 302,148 Z" />
+</vector>

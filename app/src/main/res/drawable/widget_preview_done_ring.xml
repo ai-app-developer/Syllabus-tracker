@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="220dp"
+    android:height="220dp"
+    android:viewportWidth="220"
+    android:viewportHeight="220">
+
+    <!-- Soft indigo tint background -->
+    <path
+        android:fillColor="#FFEEF0FF"
+        android:pathData="M24,4 H196 Q216,4 216,24 V196 Q216,216 196,216 H24 Q4,216 4,196 V24 Q4,4 24,4 Z" />
+
+    <!-- Progress ring track -->
+    <path
+        android:pathData="M110,44 A66,66 0 1,1 110,176 A66,66 0 1,1 110,44 Z"
+        android:strokeColor="#FFD9DDFD"
+        android:strokeWidth="14" />
+
+    <!-- 62% Progress ring arc -->
+    <path
+        android:pathData="M110,44 A66,66 0 1,1 64.8,158.1"
+        android:strokeColor="#FF4F46E5"
+        android:strokeLineCap="round"
+        android:strokeWidth="14" />
+
+    <!-- Center bars -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M86,96 H134 Q140,96 140,102 V102 Q140,108 134,108 H86 Q80,108 80,102 V102 Q80,96 86,96 Z" />
+    <path
+        android:fillColor="#FF6B7280"
+        android:pathData="M90,119 H130 Q134,119 134,123 V123 Q134,127 130,127 H90 Q86,127 86,123 V123 Q86,119 90,119 Z" />
+</vector>

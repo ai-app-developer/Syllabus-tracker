@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="480dp"
+    android:height="240dp"
+    android:viewportWidth="480"
+    android:viewportHeight="240">
+
+    <!-- Dark card background -->
+    <path
+        android:fillColor="#FF1A1A2E"
+        android:pathData="M24,4 H456 Q476,4 476,24 V216 Q476,236 456,236 H24 Q4,236 4,216 V24 Q4,4 24,4 Z" />
+
+    <!-- Header book icon -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M26,28 C29,26 33,26 36,28 V44 C33,42 29,42 26,44 Z M36,28 C39,26 43,26 46,28 V44 C43,42 39,42 36,44 Z"
+        android:strokeColor="#FFD1D5DB"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.5" />
+
+    <!-- Header bar -->
+    <path
+        android:fillColor="#FFF3F4F6"
+        android:pathData="M62,30 H206 Q212,30 212,36 V36 Q212,42 206,42 H62 Q56,42 56,36 V36 Q56,30 62,30 Z" />
+
+    <!-- Big percentage block -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M34,88 H114 Q122,88 122,96 V112 Q122,120 114,120 H34 Q26,120 26,112 V96 Q26,88 34,88 Z" />
+
+    <!-- Subtitle bar -->
+    <path
+        android:fillColor="#FF9CA3AF"
+        android:pathData="M32,140 H188 Q193,140 193,145 V145 Q193,150 188,150 H32 Q27,150 27,145 V145 Q27,140 32,140 Z" />
+
+    <!-- Progress track -->
+    <path
+        android:fillColor="#FF2E2E48"
+        android:pathData="M32,174 H270 Q276,174 276,180 V180 Q276,186 270,186 H32 Q26,186 26,180 V180 Q26,174 32,174 Z" />
+
+    <!-- Progress fill (62%) -->
+    <path
+        android:fillColor="#FF4F46E5"
+        android:pathData="M32,174 H182 Q188,174 188,180 V180 Q188,186 182,186 H32 Q26,186 26,180 V180 Q26,174 32,174 Z" />
+
+    <!-- Right Continue Studying tile -->
+    <path
+        android:fillColor="#FF242642"
+        android:pathData="M316,66 H440 Q456,66 456,82 V190 Q456,206 440,206 H316 Q300,206 300,190 V82 Q300,66 316,66 Z"
+        android:strokeColor="#FF353758"
+        android:strokeWidth="1.5" />
+
+    <!-- Tile book icon -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M324,94 C329,91 335,91 340,94 V118 C335,115 329,115 324,118 Z M340,94 C345,91 351,91 356,94 V118 C351,115 345,115 340,118 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.8" />
+
+    <!-- Tile label bars -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M327,146 H402 Q406,146 406,150 V150 Q406,154 402,154 H327 Q323,154 323,150 V150 Q323,146 327,146 Z" />
+    <path
+        android:fillColor="#FFD1D5DB"
+        android:pathData="M327,164 H396 Q400,164 400,168 V168 Q400,172 396,172 H327 Q323,172 323,168 V168 Q323,164 327,164 Z" />
+
+    <!-- Chevron -->
+    <path
+        android:pathData="M424,152 L433,160 L424,168"
+        android:strokeColor="#FFD1D5DB"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.8" />
+</vector>
