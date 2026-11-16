@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="1080dp"
+    android:height="1920dp"
+    android:viewportWidth="1080"
+    android:viewportHeight="1920">
+
+    <!-- Base light lavender / grey-blue canvas -->
+    <path android:pathData="M0,0 H1080 V1920 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="1080"
+                android:endY="1920"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#FFF6F7FB" android:offset="0.0" />
+                <item android:color="#FFEEF0FF" android:offset="0.6" />
+                <item android:color="#FFE8ECFE" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Top-right subtle curved wave -->
+    <path android:pathData="M592,0 C650,185 895,280 1080,565 L1080,0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="1080"
+                android:endY="565"
+                android:startX="620"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#FFE6EAFE" android:offset="0.0" />
+                <item android:color="#FFC7CCFB" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Upper-left sweeping cover wave creating the main diagonal ridge -->
+    <path android:pathData="M0,0 H592 C650,185 895,280 1068,570 C855,785 450,1115 0,1645 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="820"
+                android:endY="820"
+                android:startX="120"
+                android:startY="180"
+                android:type="linear">
+                <item android:color="#FFF6F7FB" android:offset="0.0" />
+                <item android:color="#FFEEF0FF" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Stronger periwinkle-blue right pocket and lower diagonal wave -->
+    <path android:pathData="M1080,560 C850,795 450,1115 0,1645 L0,1920 L1080,1920 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="240"
+                android:endY="1820"
+                android:startX="1050"
+                android:startY="640"
+                android:type="linear">
+                <item android:color="#FF8FA0FF" android:offset="0.0" />
+                <item android:color="#FFC7CCFB" android:offset="0.45" />
+                <item android:color="#FFEEF0FF" android:offset="0.9" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Soft mid-wave curve layering over the lower diagonal -->
+    <path android:pathData="M0,1645 C295,1270 675,925 950,695 C800,900 785,1245 455,1475 C270,1605 110,1675 0,1740 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="880"
+                android:endY="740"
+                android:startX="120"
+                android:startY="1560"
+                android:type="linear">
+                <item android:color="#FFEEF0FF" android:offset="0.0" />
+                <item android:color="#FFD7DCFE" android:offset="0.55" />
+                <item android:color="#FFC7CCFB" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Bottom-right soft light fold -->
+    <path android:pathData="M615,1920 C725,1750 895,1635 1080,1555 L1080,1920 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="1080"
+                android:endY="1920"
+                android:startX="680"
+                android:startY="1650"
+                android:type="linear">
+                <item android:color="#FFF4F5FC" android:offset="0.0" />
+                <item android:color="#FFE7EAFE" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Crisp subtle highlight ridge strokes -->
+    <path
+        android:pathData="M592,0 C650,185 895,280 1068,570"
+        android:strokeAlpha="0.45"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2" />
+    <path
+        android:pathData="M1080,560 C850,795 450,1115 0,1645"
+        android:strokeAlpha="0.55"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2" />
+    <path
+        android:pathData="M615,1920 C725,1750 895,1635 1080,1555"
+        android:strokeAlpha="0.55"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2" />
+</vector>

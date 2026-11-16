@@ -1,0 +1,6 @@
+{
+  "name": "Syllabus Tracker",
+  "description": "Offline-first personal syllabus tracker for managing books, chapters, study progress, and daily study reminders.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
