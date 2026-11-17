@@ -1,35 +1,150 @@
 package com.example.widgets
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
-import androidx.glance.appwidget.updateAll
+import android.util.Log
 import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.SyllabusApplication
+import com.example.data.local.dao.WidgetSummaryRow
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 object WidgetUpdater {
+  private const val TAG = "WidgetUpdater"
   private const val UNIQUE_WORK_NAME = "syllabus_widget_periodic_refresh"
 
-  suspend fun refreshAll(context: Context) {
-    val appContext = context.applicationContext
-    withContext(Dispatchers.Default) {
-      coroutineScope {
-        launch { runCatching { OverviewWidget().updateAll(appContext) } }
-        launch { runCatching { DarkProgressWidget().updateAll(appContext) } }
-        launch { runCatching { TodaysPlanWidget().updateAll(appContext) } }
-        launch { runCatching { DoneRingWidget().updateAll(appContext) } }
-        launch { runCatching { ContinueStudyingWidget().updateAll(appContext) } }
-      }
+  private val updateMutex = Mutex()
+
+  @Volatile
+  private var lastSummary: WidgetSummaryRow? = null
+
+  fun clearLastSummary() {
+    lastSummary = null
+  }
+
+  suspend fun updateNow(
+    context: Context,
+    force: Boolean = false,
+    precomputedSummary: WidgetSummaryRow? = null,
+  ) {
+    val startNs = System.nanoTime()
+    updateMutex.withLock {
+      performUpdateLocked(context, force, precomputedSummary, startNs)
     }
   }
 
-  suspend fun updateAllWidgets(context: Context) {
-    refreshAll(context)
+  suspend fun updateNowIfIdle(context: Context): Boolean {
+    if (!updateMutex.tryLock()) {
+      return false
+    }
+    return try {
+      val startNs = System.nanoTime()
+      performUpdateLocked(context, force = false, precomputedSummary = null, startNs = startNs)
+      true
+    } finally {
+      updateMutex.unlock()
+    }
+  }
+
+  private suspend fun performUpdateLocked(
+    context: Context,
+    force: Boolean,
+    precomputedSummary: WidgetSummaryRow?,
+    startNs: Long,
+  ) {
+    val app = context.applicationContext as SyllabusApplication
+    val appWidgetManager = AppWidgetManager.getInstance(app)
+
+    val overviewIds =
+      appWidgetManager.getAppWidgetIds(ComponentName(app, OverviewWidgetReceiver::class.java))
+    val darkIds =
+      appWidgetManager.getAppWidgetIds(ComponentName(app, DarkProgressWidgetReceiver::class.java))
+    val planIds =
+      appWidgetManager.getAppWidgetIds(ComponentName(app, TodaysPlanWidgetReceiver::class.java))
+    val doneIds =
+      appWidgetManager.getAppWidgetIds(ComponentName(app, DoneRingWidgetReceiver::class.java))
+    val continueIds =
+      appWidgetManager.getAppWidgetIds(
+        ComponentName(app, ContinueStudyingWidgetReceiver::class.java)
+      )
+
+    if (
+      overviewIds.isEmpty() &&
+        darkIds.isEmpty() &&
+        planIds.isEmpty() &&
+        doneIds.isEmpty() &&
+        continueIds.isEmpty()
+    ) {
+      val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+      Log.d(TAG, "updateNow took $elapsedMs ms")
+      return
+    }
+
+    val summary =
+      precomputedSummary
+        ?: withContext(Dispatchers.IO) {
+          val prefs = app.preferencesRepository.getCurrentPreferences()
+          val zone = ZoneId.systemDefault()
+          val today = LocalDate.now(zone)
+          val startOfTodayMillis = today.atStartOfDay(zone).toInstant().toEpochMilli()
+          val endOfTodayMillis = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+          app.database.syllabusDao().getWidgetSummaryRow(
+            startOfTodayMillis = startOfTodayMillis,
+            endOfTodayMillis = endOfTodayMillis,
+            lastOpenedBookId = prefs.lastOpenedBookId,
+            dailyGoal = prefs.dailyGoal.coerceAtLeast(1),
+          )
+        }
+
+    if (!force && summary == lastSummary) {
+      val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+      Log.d(TAG, "updateNow took $elapsedMs ms")
+      return
+    }
+
+    if (overviewIds.isNotEmpty()) {
+      appWidgetManager.updateAppWidget(
+        overviewIds,
+        OverviewWidgetReceiver.buildRemoteViews(app, summary),
+      )
+    }
+    if (darkIds.isNotEmpty()) {
+      appWidgetManager.updateAppWidget(
+        darkIds,
+        DarkProgressWidgetReceiver.buildRemoteViews(app, summary),
+      )
+    }
+    if (planIds.isNotEmpty()) {
+      appWidgetManager.updateAppWidget(
+        planIds,
+        TodaysPlanWidgetReceiver.buildRemoteViews(app, summary),
+      )
+    }
+    if (doneIds.isNotEmpty()) {
+      appWidgetManager.updateAppWidget(
+        doneIds,
+        DoneRingWidgetReceiver.buildRemoteViews(app, summary),
+      )
+    }
+    if (continueIds.isNotEmpty()) {
+      appWidgetManager.updateAppWidget(
+        continueIds,
+        ContinueStudyingWidgetReceiver.buildRemoteViews(app, summary),
+      )
+    }
+
+    lastSummary = summary
+    val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+    Log.d(TAG, "updateNow took $elapsedMs ms")
   }
 
   fun schedulePeriodicRefresh(context: Context) {

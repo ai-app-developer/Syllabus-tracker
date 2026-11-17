@@ -15,11 +15,8 @@ import com.example.notifications.StudyReminderScheduler
 import com.example.widgets.WidgetUpdater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 class SyllabusApplication : Application() {
@@ -32,41 +29,41 @@ class SyllabusApplication : Application() {
       dao = database.syllabusDao(),
       prefsRepo = preferencesRepository,
       runInTransaction = { block -> database.withTransaction { block() } },
-      onDataChanged = { WidgetUpdater.refreshAll(this@SyllabusApplication) },
+      onDataChanged = { WidgetUpdater.updateNow(this@SyllabusApplication) },
     )
   }
 
   private val systemClockReceiver =
     object : BroadcastReceiver() {
       override fun onReceive(context: Context, intent: Intent) {
+        val pendingResult: PendingResult? = goAsync()
         applicationScope.launch {
-          WidgetUpdater.refreshAll(this@SyllabusApplication)
+          try {
+            WidgetUpdater.updateNow(this@SyllabusApplication, force = true)
+          } finally {
+            pendingResult?.finish()
+          }
         }
       }
     }
 
-  @OptIn(FlowPreview::class)
   override fun onCreate() {
     super.onCreate()
     NotificationHelper.ensureNotificationChannel(this)
     WidgetUpdater.schedulePeriodicRefresh(this)
 
     applicationScope.launch {
-      WidgetUpdater.refreshAll(this@SyllabusApplication)
+      WidgetUpdater.updateNow(this@SyllabusApplication)
     }
 
     applicationScope.launch {
-      combine(
-        database.syllabusDao().observeBooks(),
-        database.syllabusDao().observeAllChapters(),
-        preferencesRepository.userPreferences,
-      ) { books, chapters, prefs ->
-        Triple(books, chapters, prefs)
-      }
-        .debounce(50)
-        .distinctUntilChanged()
-        .collect {
-          WidgetUpdater.refreshAll(this@SyllabusApplication)
+      syllabusRepository.observeWidgetSummaryRow()
+        .conflate()
+        .collect { summaryRow ->
+          WidgetUpdater.updateNow(
+            context = this@SyllabusApplication,
+            precomputedSummary = summaryRow,
+          )
         }
     }
 

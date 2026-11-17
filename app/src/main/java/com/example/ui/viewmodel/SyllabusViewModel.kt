@@ -534,7 +534,7 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
         } else {
           StudyReminderScheduler.cancelReminder(app)
         }
-        WidgetUpdater.refreshAll(app)
+        WidgetUpdater.updateNow(app, force = true)
       }.onSuccess {
         _snackbarMessages.tryEmit("Data imported")
       }.onFailure { err ->

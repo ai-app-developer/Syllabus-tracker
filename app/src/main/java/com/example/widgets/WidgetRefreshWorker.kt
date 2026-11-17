@@ -9,7 +9,7 @@ class WidgetRefreshWorker(
   workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
   override suspend fun doWork(): Result {
-    WidgetUpdater.refreshAll(applicationContext)
+    WidgetUpdater.updateNowIfIdle(applicationContext)
     return Result.success()
   }
 }

@@ -1,5 +1,6 @@
 package com.example
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -18,7 +19,12 @@ import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.StudyTrendPeriod
 import com.example.data.repository.SyllabusRepository
 import com.example.notifications.StudyReminderScheduler
-import com.example.widgets.WidgetBitmapHelper
+import com.example.widgets.ContinueStudyingWidgetReceiver
+import com.example.widgets.DarkProgressWidgetReceiver
+import com.example.widgets.DoneRingWidgetReceiver
+import com.example.widgets.OverviewWidgetReceiver
+import com.example.widgets.TodaysPlanWidgetReceiver
+import com.example.widgets.WidgetUpdater
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -27,13 +33,15 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -132,28 +140,22 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `widget bitmap helper draws valid progress ring and horizontal bar`() {
-    val ring =
-      com.example.widgets.WidgetBitmapHelper.drawProgressRingBitmap(
-        sizePx = 180,
-        strokePx = 18f,
-        fraction = 0.62f,
-        trackColor = 0xFFEEF0FF.toInt(),
-        arcColor = 0xFF4F46E5.toInt(),
-      )
-    assertEquals(180, ring.width)
-    assertEquals(180, ring.height)
+  fun `remoteviews widgets build cleanly with empty and populated summary rows`() = runTest {
+    val zone = ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val startMillis = today.atStartOfDay(zone).toInstant().toEpochMilli()
+    val endMillis = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
-    val bar =
-      com.example.widgets.WidgetBitmapHelper.drawHorizontalBarBitmap(
-        widthPx = 240,
-        heightPx = 14,
-        fraction = 0.5f,
-        trackColor = 0xFFEEF0FF.toInt(),
-        fillColor = 0xFF4F46E5.toInt(),
-      )
-    assertEquals(240, bar.width)
-    assertEquals(14, bar.height)
+    val emptyRow = db.syllabusDao().getWidgetSummaryRow(startMillis, endMillis, -1L, 2)
+    assertEquals(0, emptyRow.totalBooks)
+    assertEquals(0, emptyRow.overallPercentage)
+    assertEquals(null, emptyRow.activeBookId)
+
+    assertNotNull(OverviewWidgetReceiver.buildRemoteViews(context, emptyRow))
+    assertNotNull(DarkProgressWidgetReceiver.buildRemoteViews(context, emptyRow))
+    assertNotNull(TodaysPlanWidgetReceiver.buildRemoteViews(context, emptyRow))
+    assertNotNull(DoneRingWidgetReceiver.buildRemoteViews(context, emptyRow))
+    assertNotNull(ContinueStudyingWidgetReceiver.buildRemoteViews(context, emptyRow))
   }
 
   @Test
@@ -300,13 +302,15 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `widget aggregate summary and LruCache bitmap ring reuse work efficiently`() = runTest {
-    val bookId = repository.addBook("Algorithms")
-    repository.addChapter(bookId, "Sorting", 1, isCompleted = true)
-    repository.addChapter(bookId, "Graphs", 2, isCompleted = false)
-    repository.setDailyGoal(4)
+  fun `single aggregate Room query, RemoteViews WidgetUpdater, and widget toggle work fast`() = runTest {
+    val app = context.applicationContext as SyllabusApplication
+    val appRepo = app.syllabusRepository
+    val bookId = appRepo.addBook("Algorithms")
+    appRepo.addChapter(bookId, "Sorting", 1, isCompleted = true)
+    appRepo.addChapter(bookId, "Graphs", 2, isCompleted = false)
+    appRepo.setDailyGoal(4)
 
-    val summary = repository.loadWidgetSummary()
+    val summary = appRepo.loadWidgetSummary()
     assertEquals(1, summary.totalBooks)
     assertEquals(2, summary.totalChapters)
     assertEquals(1, summary.completedChapters)
@@ -316,20 +320,24 @@ class ExampleRobolectricTest {
     assertEquals("Algorithms", summary.activeBook?.name)
     assertEquals("Graphs", summary.activeBook?.nextChapterName)
 
-    val ring1 =
-      WidgetBitmapHelper.getOrDrawProgressRingBitmap(
-        percentage = 50,
-        trackColor = 0xFFEEF0FF.toInt(),
-        arcColor = 0xFF4F46E5.toInt(),
-      )
-    val ring2 =
-      WidgetBitmapHelper.getOrDrawProgressRingBitmap(
-        percentage = 50,
-        trackColor = 0xFFEEF0FF.toInt(),
-        arcColor = 0xFF4F46E5.toInt(),
-      )
-    assertEquals(300, ring1.width)
-    assertEquals(300, ring1.height)
-    assertSame(ring1, ring2)
+    val manager = AppWidgetManager.getInstance(app)
+    val shadowManager = shadowOf(manager)
+    shadowManager.createWidgets(OverviewWidgetReceiver::class.java, R.layout.widget_overview, 1)
+    shadowManager.createWidgets(DarkProgressWidgetReceiver::class.java, R.layout.widget_dark_progress, 1)
+    shadowManager.createWidgets(TodaysPlanWidgetReceiver::class.java, R.layout.widget_todays_plan, 1)
+    shadowManager.createWidgets(DoneRingWidgetReceiver::class.java, R.layout.widget_done_ring, 1)
+    shadowManager.createWidgets(ContinueStudyingWidgetReceiver::class.java, R.layout.widget_continue_studying, 1)
+
+    ShadowLog.clear()
+    WidgetUpdater.clearLastSummary()
+    WidgetUpdater.updateNow(app, force = true)
+    val logs = ShadowLog.getLogsForTag("WidgetUpdater")
+    assertTrue(logs.any { it.msg.startsWith("updateNow took ") })
+    logs.forEach { println("WIDGET_LOG: ${it.msg}") }
+
+    assertTrue(appRepo.completeNextIncompleteChapterFromWidget())
+    val updated = appRepo.loadWidgetSummary()
+    assertEquals(100, updated.overallPercentage)
+    assertEquals(2, updated.completedToday)
   }
 }

@@ -4,6 +4,7 @@ import com.example.data.backup.BackupImportMode
 import com.example.data.backup.BackupManager
 import com.example.data.backup.SyllabusBackup
 import com.example.data.local.dao.SyllabusDao
+import com.example.data.local.dao.WidgetSummaryRow
 import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
 import com.example.data.preferences.UserPreferences
@@ -15,8 +16,13 @@ import java.time.ZoneId
 import java.time.format.TextStyle
 import java.time.temporal.TemporalAdjusters
 import java.util.Locale
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlin.math.roundToInt
 
 data class BookProgressSummary(
@@ -157,6 +163,25 @@ class SyllabusRepository(
 
   fun observeChaptersForBook(bookId: Long): Flow<List<ChapterEntity>> = dao.observeChaptersForBook(bookId)
 
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun observeWidgetSummaryRow(): Flow<WidgetSummaryRow> =
+    prefsRepo.userPreferences
+      .map { it.lastOpenedBookId to it.dailyGoal.coerceAtLeast(1) }
+      .distinctUntilChanged()
+      .flatMapLatest { (lastOpenedBookId, dailyGoal) ->
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now(zone)
+        val startOfTodayMillis = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val endOfTodayMillis = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        dao.observeWidgetSummaryRow(
+          startOfTodayMillis = startOfTodayMillis,
+          endOfTodayMillis = endOfTodayMillis,
+          lastOpenedBookId = lastOpenedBookId,
+          dailyGoal = dailyGoal,
+        )
+      }
+      .conflate()
+
   suspend fun loadWidgetSummary(): WidgetSummaryData {
     val prefs = prefsRepo.getCurrentPreferences()
     val zone = ZoneId.systemDefault()
@@ -164,58 +189,53 @@ class SyllabusRepository(
     val startOfTodayMillis = today.atStartOfDay(zone).toInstant().toEpochMilli()
     val endOfTodayMillis = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
-    val stats = dao.getWidgetAggregateStats(startOfTodayMillis, endOfTodayMillis)
-    val overallPercentage =
-      if (stats.totalChapters == 0) 0
-      else ((stats.completedChapters * 100f) / stats.totalChapters).roundToInt()
+    val row =
+      dao.getWidgetSummaryRow(
+        startOfTodayMillis = startOfTodayMillis,
+        endOfTodayMillis = endOfTodayMillis,
+        lastOpenedBookId = prefs.lastOpenedBookId,
+        dailyGoal = prefs.dailyGoal.coerceAtLeast(1),
+      )
 
     val activeBook =
-      if (stats.totalBooks == 0) {
-        null
-      } else {
-        val lastOpened =
-          if (prefs.lastOpenedBookId > 0L) dao.getBookByIdOnce(prefs.lastOpenedBookId) else null
-        val lastOpenedNext =
-          if (lastOpened != null) dao.getNextIncompleteChapterOnce(lastOpened.id) else null
-
-        val chosenBook: BookEntity?
-        val chosenNext: ChapterEntity?
-        if (lastOpened != null && lastOpenedNext != null) {
-          chosenBook = lastOpened
-          chosenNext = lastOpenedNext
-        } else {
-          val incompleteBook = dao.getFirstIncompleteBookOnce()
-          if (incompleteBook != null) {
-            chosenBook = incompleteBook
-            chosenNext = dao.getNextIncompleteChapterOnce(incompleteBook.id)
-          } else {
-            chosenBook = lastOpened ?: dao.getLatestBookOnce()
-            chosenNext = null
-          }
-        }
-
-        chosenBook?.let { book ->
-          val counts = dao.getBookChapterCounts(book.id)
-          WidgetActiveBook(
-            id = book.id,
-            name = book.name,
-            totalChapters = counts.totalChapters,
-            completedChapters = counts.completedChapters,
-            nextChapterNumber = chosenNext?.number,
-            nextChapterName = chosenNext?.name,
-          )
-        }
+      row.activeBookId?.let { bookId ->
+        WidgetActiveBook(
+          id = bookId,
+          name = row.activeBookName.orEmpty(),
+          totalChapters = row.activeBookTotalChapters,
+          completedChapters = row.activeBookCompletedChapters,
+          nextChapterNumber = row.nextChapterNumber,
+          nextChapterName = row.nextChapterName,
+        )
       }
 
     return WidgetSummaryData(
-      totalBooks = stats.totalBooks,
-      totalChapters = stats.totalChapters,
-      completedChapters = stats.completedChapters,
-      overallPercentage = overallPercentage,
-      completedToday = stats.completedToday,
-      dailyGoal = prefs.dailyGoal.coerceAtLeast(1),
+      totalBooks = row.totalBooks,
+      totalChapters = row.totalChapters,
+      completedChapters = row.completedChapters,
+      overallPercentage = row.overallPercentage,
+      completedToday = row.completedToday,
+      dailyGoal = row.dailyGoal,
       activeBook = activeBook,
     )
+  }
+
+  suspend fun completeNextIncompleteChapterFromWidget(): Boolean {
+    val prefs = prefsRepo.getCurrentPreferences()
+    val lastOpened =
+      if (prefs.lastOpenedBookId > 0L) dao.getBookByIdOnce(prefs.lastOpenedBookId) else null
+    val candidateChapter =
+      lastOpened?.let { dao.getNextIncompleteChapterOnce(it.id) }
+        ?: dao.getFirstIncompleteBookOnce()?.let { dao.getNextIncompleteChapterOnce(it.id) }
+        ?: return false
+
+    dao.updateChapterCompletion(
+      chapterId = candidateChapter.id,
+      isCompleted = true,
+      completedAt = System.currentTimeMillis(),
+    )
+    prefsRepo.setLastOpenedBookId(candidateChapter.bookId)
+    return true
   }
 
   suspend fun exportBackupJson(appVersion: String): String {

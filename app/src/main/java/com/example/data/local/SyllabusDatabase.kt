@@ -29,6 +29,7 @@ abstract class SyllabusDatabase : RoomDatabase() {
                 SyllabusDatabase::class.java,
                 "syllabus_tracker.db",
               )
+              .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
               .build()
               .also { INSTANCE = it }
         }

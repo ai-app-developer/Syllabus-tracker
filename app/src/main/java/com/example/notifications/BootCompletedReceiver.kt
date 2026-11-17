@@ -19,7 +19,7 @@ class BootCompletedReceiver : BroadcastReceiver() {
         action == Intent.ACTION_TIME_CHANGED ||
         action == Intent.ACTION_TIMEZONE_CHANGED
     ) {
-      val pendingResult = goAsync()
+      val pendingResult: PendingResult? = goAsync()
       val app = context.applicationContext as SyllabusApplication
       app.applicationScope.launch {
         try {
@@ -33,9 +33,9 @@ class BootCompletedReceiver : BroadcastReceiver() {
               )
             }
           }
-          WidgetUpdater.refreshAll(app)
+          WidgetUpdater.updateNow(app, force = true)
         } finally {
-          pendingResult.finish()
+          pendingResult?.finish()
         }
       }
     }

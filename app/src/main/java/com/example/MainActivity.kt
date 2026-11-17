@@ -137,7 +137,7 @@ fun SyllabusApp(
       if (event == Lifecycle.Event.ON_RESUME) {
         val app = context.applicationContext as? SyllabusApplication
         app?.applicationScope?.launch {
-          WidgetUpdater.refreshAll(app)
+          WidgetUpdater.updateNow(app)
         }
       }
     }

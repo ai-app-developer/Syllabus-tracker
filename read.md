@@ -13,7 +13,7 @@
 - **Progress Analytics**: `Overall` and `By Book` tabs; overall percentage card with cumulative progress chart and Completed/Remaining/Total breakdown; weekly `Study Trend` bar chart (`This Week` / `Last Week`) computed from `completedAt` timestamps.
 - **Daily Study Reminders**: Scheduled via `AlarmManager` at a user-chosen time (default 8:00 PM), showing remaining chapters for the day (e.g., `"2 chapters left today. Keep going!"`). Requests `POST_NOTIFICATIONS` at runtime on Android 13+ and reschedules after reboot via `BootCompletedReceiver`.
 - **Local Data Backup (Export / Import)**: Zero-permission Storage Access Framework JSON export (`syllabus_tracker_backup_YYYY-MM-DD.json`) and validated import supporting **Replace** or **Merge** (deduplicating by book name + chapter number) inside an atomic Room transaction.
-- **5 Android Home-Screen Widgets + Instant Refresh**: Jetpack Glance widgets (`Overview`, `Dark Progress`, `Today's Plan`, `Done Ring`, `Continue Studying`) updated immediately after DB writes, on app start/resume, and on date/time/timezone/boot events, backed by a 30-minute WorkManager fallback.
+- **5 Android Home-Screen Widgets + Direct RemoteViews Refresh**: Classic `RemoteViews` + `AppWidgetProvider` widgets (`Overview`, `Dark Progress`, `Today's Plan`, `Done Ring`, `Continue Studying`) using native `ProgressBar` rings/bars, updated via a single aggregate Room query (`WidgetSummaryRow`), WAL-mode singleton DB, and direct `AppWidgetManager.updateAppWidget`. Includes `WidgetActionReceiver` (`goAsync()`) for direct widget chapter completion, conflated Flow observer, start/resume/boot/date/time/timezone triggers, and 30-minute WorkManager backup.
 - **Empty States**: Clean empty states with call-to-action buttons when no books or no chapters exist.
 
 ---
@@ -134,7 +134,8 @@ app/src/main/java/com/example/
 │   ├── DoneRingWidget.kt
 │   ├── OverviewWidget.kt
 │   ├── TodaysPlanWidget.kt
-│   ├── WidgetBitmapHelper.kt
+│   ├── WidgetActionReceiver.kt
+│   ├── WidgetIntents.kt
 │   ├── WidgetRefreshWorker.kt
 │   └── WidgetUpdater.kt
 └── ui/
@@ -178,22 +179,22 @@ app/src/main/java/com/example/
 ## 6. Current Progress Checklist
 
 ### Done
-- [x] Project Gradle configuration (`minSdk 26`, `applicationId`, Room, DataStore, Navigation Compose, Kotlin Serialization, Glance, WorkManager)
+- [x] Project Gradle configuration (`minSdk 26`, `applicationId`, Room, DataStore, Navigation Compose, Kotlin Serialization, WorkManager; Glance removed)
 - [x] Custom adaptive launcher icon and monochrome notification small icon
 - [x] Flat Material 3 design system (`Color.kt`, `Type.kt`, `Theme.kt`)
-- [x] Room database (`BookEntity`, `ChapterEntity`, `SyllabusDao`, `SyllabusDatabase`)
-- [x] DataStore preferences (`UserPreferencesRepository`) and reactive `SyllabusRepository`
+- [x] Room database (`BookEntity`, `ChapterEntity`, `SyllabusDao`, `SyllabusDatabase` singleton with `JournalMode.WRITE_AHEAD_LOGGING`)
+- [x] DataStore preferences (`UserPreferencesRepository` with in-memory cache) and reactive `SyllabusRepository`
 - [x] Daily reminder notifications (`NotificationHelper`, `StudyReminderScheduler`, `StudyReminderReceiver`, `BootCompletedReceiver`)
 - [x] `SyllabusViewModel` and `MainActivity` navigation host (including optimistic chapter toggle state and `ON_RESUME` widget refresh)
 - [x] All screens & modals (`HomeScreen`, `BooksScreen`, `BookDetailScreen`, `AddChapterBottomSheet`, `ProgressScreen`, `MoreScreen`, `Dialogs`, `SyllabusBottomBar`)
-- [x] 5 Jetpack Glance Home-Screen Widgets (`Overview`, `Dark Progress`, `Today's Plan`, `Done Ring`, `Continue Studying`) with lightweight aggregate queries, `LruCache` 300x300 ring bitmaps, pure-XML preview drawables, and deep-link navigation
+- [x] 5 Classic `RemoteViews` Home-Screen Widgets (`Overview`, `Dark Progress`, `Today's Plan`, `Done Ring`, `Continue Studying`) with XML layouts, native `ProgressBar` ring/bar drawables (no Bitmaps), pure-XML preview drawables, `exported="true"` receivers, `PendingIntent.FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT`, and `WidgetActionReceiver` (`goAsync()`) toggle handling
 - [x] Static periwinkle wave background (`res/drawable-nodpi/bg_home_waves.xml`) applied behind `HomeScreen` with transparent edge-to-edge status bar
 - [x] Local Backup Export / Import (`BackupModels`, `BackupManager`, SAF pickers in `MoreScreen`, confirmation & error dialogs, atomic Room transaction import, widget & reminder resync)
-- [x] Instant Widget Refresh architecture (`WidgetUpdater.refreshAll` concurrent execution, `applicationScope` Flow observer with `debounce(50).distinctUntilChanged()`, start/resume/boot/date/time/timezone triggers, 30-min WorkManager fallback)
-- [x] `compile_applet` build verification and `gradle :app:testDebugUnitTest` Robolectric test suite (progress calculations, backup validation/replace/merge, widget summary queries, `LruCache` bitmap reuse, reminder scheduler)
+- [x] Direct Fast Widget Refresh architecture (`WidgetUpdater.updateNow` with single aggregate SQL query `getWidgetSummaryRow`, `Mutex` concurrency guard, in-memory `lastSummary` diffing, `conflate()` Flow observer with no debounce, start/resume/boot/date/time/timezone triggers, idle-guarded 30-min WorkManager backup, `Log.d("WidgetUpdater", "updateNow took X ms")`)
+- [x] `compile_applet` build verification and `gradle :app:testDebugUnitTest` Robolectric test suite (progress calculations, backup validation/replace/merge, single aggregate query, `RemoteViews` builders, `WidgetUpdater.updateNow` timing, reminder scheduler)
 
 ### Pending
-- None (all core features, widgets, backup export/import, instant widget updates, and verifications complete)
+- None (all core features, RemoteViews widgets, backup export/import, direct fast widget updates, and verifications complete)
 
 ### Known Bugs
 - None identified.
@@ -264,25 +265,59 @@ Apply the design from Image 2 as the background of the in-app Home screen only.
 ## 8. Home-Screen Widgets & Background Details
 
 ### Home-Screen Widgets (`com.example.widgets`)
-1. **Overview** (`4x2`, `widget_overview_info.xml`, `OverviewWidget` / `OverviewWidgetReceiver`): Header with book icon, `"Syllabus Tracker"`, and `+` button opening Add Chapter; left circular bitmap progress ring (`#4F46E5` arc, `#EEF0FF` track); vertical divider; right 3-row counts (`Books`, `Chapters`, `Completed`).
-2. **Dark Progress** (`4x2`, `widget_dark_progress_info.xml`, `DarkProgressWidget` / `DarkProgressWidgetReceiver`): Solid `#1A1A2E` rounded card with white header, overall `%`, `"Syllabus Completed"`, indigo `#4F46E5` horizontal bar, and `#262842` `"Continue Studying"` tile opening the active book.
-3. **Today's Plan** (`3x2`, `widget_todays_plan_info.xml`, `TodaysPlanWidget` / `TodaysPlanWidgetReceiver`): Calendar icon, `"Today's Plan"`, chevron, circle checkbox with `"Complete X chapters"` daily goal, and progress bar with `completedToday/dailyGoal`.
-4. **Done Ring** (`2x2`, `widget_done_ring_info.xml`, `DoneRingWidget` / `DoneRingWidgetReceiver`): Solid `#EEF0FF` background with centered circular bitmap progress ring displaying overall `%` and `"Done"`.
-5. **Continue Studying** (`4x1`, `widget_continue_studying_info.xml`, `ContinueStudyingWidget` / `ContinueStudyingWidgetReceiver`): Book tile, active book name, next incomplete chapter, progress bar + `%`, and circular play button opening that book's chapter list.
+All 5 widgets use classic `AppWidgetProvider` + XML `RemoteViews` layouts (`res/layout/widget_*.xml`) and native `ProgressBar` ring/bar drawables (`widget_ring_progress_*.xml`, `widget_bar_*.xml`) with zero Bitmap rendering or Glance serialization overhead:
+1. **Overview** (`4x2`, `widget_overview_info.xml`, `widget_overview.xml`, `OverviewWidgetReceiver`): Header with book icon, `"Syllabus Tracker"`, and `+` button opening Add Chapter; left `ProgressBar` circular ring (`widget_ring_progress_light.xml`: `#4F46E5` arc, `#EEF0FF` track); vertical divider; right 3-row counts (`Books`, `Chapters`, `Completed`).
+2. **Dark Progress** (`4x2`, `widget_dark_progress_info.xml`, `widget_dark_progress.xml`, `DarkProgressWidgetReceiver`): Solid `#1A1A2E` rounded card with white header, overall `%`, `"Syllabus Completed"`, indigo `#4F46E5` horizontal `ProgressBar` (`widget_bar_dark.xml`), and `#262842` `"Continue Studying"` tile opening the active book.
+3. **Today's Plan** (`3x2`, `widget_todays_plan_info.xml`, `widget_todays_plan.xml`, `TodaysPlanWidgetReceiver`): Calendar icon, `"Today's Plan"`, chevron, clickable goal checkbox row (sends `ACTION_COMPLETE_NEXT_CHAPTER` broadcast to `WidgetActionReceiver` which writes to Room and calls `WidgetUpdater.updateNow` inside `goAsync()`), `"Complete X chapters"` daily goal, and horizontal `ProgressBar` (`widget_bar_light.xml` / `widget_bar_green.xml`) with `completedToday/dailyGoal`.
+4. **Done Ring** (`2x2`, `widget_done_ring_info.xml`, `widget_done_ring.xml`, `DoneRingWidgetReceiver`): Solid `#EEF0FF` background with centered `ProgressBar` circular ring (`widget_ring_progress_indigo.xml`) displaying overall `%` and `"Done"`.
+5. **Continue Studying** (`4x1`, `widget_continue_studying_info.xml`, `widget_continue_studying.xml`, `ContinueStudyingWidgetReceiver`): Book tile, active book name, next incomplete chapter, horizontal `ProgressBar` + `%`, and circular play button opening that book's chapter list.
 
-- **Auto-Refresh**: `WidgetUpdater.refreshAll()` runs `updateAll()` across all 5 Glance widgets concurrently on `Dispatchers.Default` immediately after DB writes and settings updates; `SyllabusApplication` also observes `combine(books, chapters, prefs).debounce(50).distinctUntilChanged()` to guarantee rapid widget sync. Refresh triggers cover app startup, `Lifecycle.Event.ON_RESUME`, `BOOT_COMPLETED`, `ACTION_DATE_CHANGED`, `ACTION_TIME_CHANGED`, and `ACTION_TIMEZONE_CHANGED`, with `WidgetRefreshWorker` (30-min `ExistingPeriodicWorkPolicy.KEEP`) as periodic backup.
-- **Fast Rendering & Optimistic UI**: `SyllabusDao` provides aggregate `COUNT`/`SUM` queries (`getWidgetAggregateStats`, `getBookChapterCounts`) and `WidgetBitmapHelper` caches `300x300` ring bitmaps in an `LruCache(128)` keyed by percentage, dimensions, and colors. Chapter toggles update `SyllabusViewModel` optimistically right before the Room write and widget refresh.
+- **Direct Synchronous-Fast Refresh (`WidgetUpdater.updateNow`)**: Runs one single aggregate Room query (`SyllabusDao.getWidgetSummaryRow` on WAL-mode singleton `SyllabusDatabase`, paired with in-memory cached `UserPreferences`), skips widgets with zero placed IDs via `AppWidgetManager.getAppWidgetIds(ComponentName)`, skips `updateAppWidget` when `summary == lastSummary` (unless `force = true`), builds `RemoteViews` directly, and logs `Log.d("WidgetUpdater", "updateNow took X ms")`.
+- **Concurrency & Triggers**: Guarded by a `Mutex` so only one update runs at a time (`WidgetRefreshWorker` calls `updateNowIfIdle()` and aborts immediately if busy). Invoked directly on `applicationScope` (`SupervisorJob() + Dispatchers.Default`) after every DB write, collected from `observeWidgetSummaryRow().conflate()` (no debounce) in `SyllabusApplication.onCreate()`, and triggered on app start, `ON_RESUME`, `BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`, `ACTION_DATE_CHANGED`, `ACTION_TIME_CHANGED`, and `ACTION_TIMEZONE_CHANGED`.
 
 ### Home Screen Background
 - `res/drawable-nodpi/bg_home_waves.xml` rendered with `Image(..., contentScale = ContentScale.Crop)` behind `HomeScreen` content and extending behind the transparent edge-to-edge status bar (`SystemBarStyle.light(TRANSPARENT, TRANSPARENT)`). Other screens keep `#F6F7FB`.
 
 ---
 
-## 9. Backup JSON Schema & Instant Widget Update Specification
+## 9. Backup JSON Schema & RemoteViews Performance Fix Specification
 
-### Update Summary
-1. **Data Export / Import (Local Backup)**: Added a `"Backup"` section inside `MoreScreen` with `"Export Data"` (`ActivityResultContracts.CreateDocument`, `application/json`, suggested filename `syllabus_tracker_backup_YYYY-MM-DD.json`, `Dispatchers.IO`, snackbar `"Backup saved"`) and `"Import Data"` (`ActivityResultContracts.OpenDocument`). Imported files are size-checked (`<= 20 MB`) and strictly validated (`schemaVersion == 1`, required keys, positive/valid IDs and ranges, no broken `bookId` references) before prompting a plain confirmation dialog (`Replace existing data`, `Merge with existing data`, `Cancel`), running in a single Room `withTransaction` block, restoring preferences/reminder schedule, refreshing all widgets, and showing snackbar `"Data imported"`.
-2. **Instant Widget Updates (Milliseconds)**: Replaced full-table widget reads with lightweight aggregate DAO queries, added `LruCache` for 300x300 progress ring bitmaps, ran all 5 `GlanceAppWidget.updateAll` calls concurrently inside `applicationScope` (`Dispatchers.Default`) immediately on DB mutations and combined debounced Flow changes, added start/`ON_RESUME`/boot/`DATE_CHANGED`/`TIME_CHANGED`/`TIMEZONE_CHANGED` triggers, and applied optimistic in-app chapter toggling.
+### Performance Fix Request (Verbatim)
+```text
+PERFORMANCE FIX for the existing "Syllabus Tracker" Android app (Kotlin + Compose + Room). Read read.md first. Do NOT change any widget visual design, app UI, database schema or features. Only make widget refresh much faster (target: visible update within ~100-300 ms after a change in the app).
+
+PROBLEM
+Widgets update, but too slowly. Glance updateAll() recomposes and serializes the whole UI on every update, ring Bitmaps are redrawn, and debounce/WorkManager add delay.
+
+REQUIRED CHANGES
+
+1. REPLACE Glance with classic RemoteViews for all 5 widgets (Overview, Dark Progress, Today's Plan, Done Ring, Continue Studying).
+   - Each widget = AppWidgetProvider + XML layout + appwidget-provider XML. Keep exactly the same look (24dp rounded solid backgrounds as shape drawables, same colors, icons, text).
+   - Remove the Glance dependency after migration.
+
+2. NO BITMAP RINGS. Draw circular rings using a ProgressBar in the RemoteViews layout:
+   - Use a ring drawable (layer-list with two ring shapes: track + progress, using rotate/level or style="?android:attr/progressBarStyleHorizontal" with a circular progressDrawable), max=100, updated via remoteViews.setProgressBar(id, 100, percent, false).
+   - Percent text via setTextViewText. Horizontal bars also via setProgressBar. This removes all Bitmap drawing and LruCache work.
+
+3. DIRECT, SYNCHRONOUS-FAST UPDATE PATH
+   - Create object WidgetUpdater with fun updateNow(context). It must:
+     a) Run one single aggregate Room query (books count, chapters count, completed count, today's completed count, daily goal, last studied book + next chapter + its percent) returning one data class.
+     b) Build RemoteViews for each widget and call AppWidgetManager.updateAppWidget(ids, views) directly. Use getAppWidgetIds(ComponentName) and skip widgets that have no placed instances.
+   - Call it from an application-level CoroutineScope(SupervisorJob() + Dispatchers.Default) immediately after every DB write (add/edit/delete book or chapter, toggle complete, goal change, import, last-studied update). No delay(), no debounce on this path.
+   - Keep the in-memory last summary; if the new summary equals the previous one, skip the update.
+
+4. DATABASE OBSERVER (safety net): in Application.onCreate collect the summary Flow with NO debounce (use conflate()), and call updateNow on every emission. Make sure only one update runs at a time (conflate / Mutex) so updates never queue up.
+
+5. Use ONE singleton Room instance shared by app and widgets. Enable WAL mode and keep widget queries as COUNT/SUM only.
+
+6. Triggers still required: app start, ON_RESUME, BOOT_COMPLETED, ACTION_DATE_CHANGED, ACTION_TIMEZONE_CHANGED, ACTION_TIME_CHANGED. Keep WorkManager (30 min) only as a backup, and make sure it never runs while another update is in progress.
+
+7. Widget click handling: use PendingIntent.FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT with setOnClickPendingIntent. Any toggle inside a widget goes through a BroadcastReceiver that writes to Room, then calls updateNow before finishing (use goAsync()).
+
+8. Manifest: all 5 receivers exported="true" with APPWIDGET_UPDATE intent-filter and correct meta-data. appwidget-provider XML: updatePeriodMillis="1800000", resizeMode="horizontal|vertical", widgetCategory="home_screen".
+
+9. Keep a Log.d("WidgetUpdater", "updateNow took X ms") that prints how long each update took, so I can check it in Logcat.
+```
 
 ### Backup JSON Schema (`schemaVersion = 1`)
 ```json

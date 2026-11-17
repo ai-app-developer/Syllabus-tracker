@@ -1,5 +1,6 @@
 package com.example.widgets
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import com.example.MainActivity
@@ -14,6 +15,11 @@ object WidgetIntents {
   const val ACTION_OPEN_TODAYS_PLAN = "com.example.WIDGET_OPEN_TODAYS_PLAN"
   const val ACTION_OPEN_PROGRESS = "com.example.WIDGET_OPEN_PROGRESS"
 
+  const val ACTION_COMPLETE_NEXT_CHAPTER = "com.example.WIDGET_COMPLETE_NEXT_CHAPTER"
+
+  private const val PENDING_FLAGS =
+    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+
   fun createActivityIntent(
     context: Context,
     action: String,
@@ -25,7 +31,31 @@ object WidgetIntents {
       if (bookId != null) {
         putExtra(EXTRA_BOOK_ID, bookId)
       }
-      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+      flags =
+        Intent.FLAG_ACTIVITY_NEW_TASK or
+          Intent.FLAG_ACTIVITY_CLEAR_TOP or
+          Intent.FLAG_ACTIVITY_SINGLE_TOP
     }
+  }
+
+  fun createActivityPendingIntent(
+    context: Context,
+    requestCode: Int,
+    action: String,
+    bookId: Long? = null,
+  ): PendingIntent {
+    val intent = createActivityIntent(context, action, bookId)
+    return PendingIntent.getActivity(context, requestCode, intent, PENDING_FLAGS)
+  }
+
+  fun createCompleteNextChapterPendingIntent(
+    context: Context,
+    requestCode: Int,
+  ): PendingIntent {
+    val intent =
+      Intent(context, WidgetActionReceiver::class.java).apply {
+        action = ACTION_COMPLETE_NEXT_CHAPTER
+      }
+    return PendingIntent.getBroadcast(context, requestCode, intent, PENDING_FLAGS)
   }
 }

@@ -29,7 +29,7 @@
 
         <receiver
             android:name=".widgets.OverviewWidgetReceiver"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/widget_overview_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -41,7 +41,7 @@
 
         <receiver
             android:name=".widgets.DarkProgressWidgetReceiver"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/widget_dark_progress_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -53,7 +53,7 @@
 
         <receiver
             android:name=".widgets.TodaysPlanWidgetReceiver"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/widget_todays_plan_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -65,7 +65,7 @@
 
         <receiver
             android:name=".widgets.DoneRingWidgetReceiver"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/widget_done_ring_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -77,7 +77,7 @@
 
         <receiver
             android:name=".widgets.ContinueStudyingWidgetReceiver"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/widget_continue_studying_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -86,6 +86,10 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_continue_studying_info" />
         </receiver>
+
+        <receiver
+            android:name=".widgets.WidgetActionReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".notifications.StudyReminderReceiver"
