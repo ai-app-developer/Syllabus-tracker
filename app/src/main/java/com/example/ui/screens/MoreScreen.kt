@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.History
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Upload
+import androidx.compose.material.icons.outlined.Vibration
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -84,6 +86,8 @@ fun MoreScreen(
   onEditDailyGoal: () -> Unit,
   onToggleReminder: (Boolean) -> Unit,
   onEditReminderTime: () -> Unit,
+  onToggleTimerAlarm: (Boolean) -> Unit,
+  onToggleTimerVibration: (Boolean) -> Unit,
   onExportBackupUri: (Uri) -> Unit,
   onImportBackupUri: (Uri) -> Unit,
 ) {
@@ -423,6 +427,122 @@ fun MoreScreen(
                 tint = TextSecondary,
               )
             }
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Box(
+              modifier =
+                Modifier.size(42.dp)
+                  .clip(RoundedCornerShape(12.dp))
+                  .background(LightIndigoTint),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Outlined.Alarm,
+                contentDescription = null,
+                tint = PrimaryIndigo,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Timer Alarm",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary,
+              )
+              Text(
+                text = "Play short chime on Pomodoro & goal events",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+              )
+            }
+            Switch(
+              checked = preferences.timerAlarmEnabled,
+              onCheckedChange = onToggleTimerAlarm,
+              colors =
+                SwitchDefaults.colors(
+                  checkedThumbColor = Color.White,
+                  checkedTrackColor = PrimaryIndigo,
+                  uncheckedThumbColor = Color.White,
+                  uncheckedTrackColor = ProgressTrack,
+                  uncheckedBorderColor = Color.Transparent,
+                ),
+              modifier = Modifier.testTag("more_timer_alarm_switch"),
+            )
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Box(
+              modifier =
+                Modifier.size(42.dp)
+                  .clip(RoundedCornerShape(12.dp))
+                  .background(LightIndigoTint),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Outlined.Vibration,
+                contentDescription = null,
+                tint = PrimaryIndigo,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Vibration",
+                style = MaterialTheme.typography.titleMedium,
+                color = TextPrimary,
+              )
+              Text(
+                text = "Short vibration pulse with timer alarm",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+              )
+            }
+            Switch(
+              checked = preferences.timerVibrationEnabled,
+              onCheckedChange = onToggleTimerVibration,
+              colors =
+                SwitchDefaults.colors(
+                  checkedThumbColor = Color.White,
+                  checkedTrackColor = PrimaryIndigo,
+                  uncheckedThumbColor = Color.White,
+                  uncheckedTrackColor = ProgressTrack,
+                  uncheckedBorderColor = Color.Transparent,
+                ),
+              modifier = Modifier.testTag("more_timer_vibration_switch"),
+            )
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(
+              imageVector = Icons.Outlined.Info,
+              contentDescription = null,
+              tint = TextSecondary,
+              modifier = Modifier.size(16.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+              text = "Alarm volume uses system alarm volume",
+              style = MaterialTheme.typography.bodyMedium,
+              color = TextSecondary,
+            )
           }
         }
       }

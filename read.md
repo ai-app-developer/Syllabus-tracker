@@ -133,6 +133,9 @@ app/src/main/java/com/example/
 │   ├── StudyReminderReceiver.kt
 │   └── StudyReminderScheduler.kt
 ├── timer/
+│   ├── TimerAlarmPlayer.kt
+│   ├── TimerAlarmScheduler.kt
+│   ├── TimerAnalytics.kt
 │   ├── TimerForegroundService.kt
 │   └── TimerMath.kt
 ├── widgets/
@@ -214,6 +217,7 @@ app/src/main/java/com/example/
   - [x] `TimerMath` & `TimerRepository` (monotonic clock elapsed calculation, pause/resume/lap/Pomodoro transitions, midnight day-split saving, duplicate-save guard, single-active-session guard, crash/kill/reboot recovery)
   - [x] `TimerAnalyticsCalculator` computing real `This Week` (Sat–Fri) / `This Month` / `This Year` bars, previous-period `%` delta, top-4 + `"Others"` book donut slices, today's total, and streak days
   - [x] Android 14 `TimerForegroundService` (`foregroundServiceType="specialUse"`) + ongoing chronometer notification (`Pause`/`Resume` & `Stop` actions) & milestone alerts
+- [x] **Study Timer Mini Alarm System**: Short 2.8s `USAGE_ALARM` chime (`TimerAlarmPlayer`) + 400ms one-shot vibration (`VIBRATE`), DND filtering, persistent per-phase/goal deduplication (`PrefsAlarmDeduplicator`), crash-recovery stale suppression, `ELAPSED_REALTIME_WAKEUP` backup scheduler (`TimerAlarmScheduler` / `TimerAlarmReceiver`), `MoreScreen` switches (`Timer Alarm`, `Vibration`, system alarm volume note), and Backup Export/Import support
 - [x] `compile_applet` build verification and `gradle :app:testDebugUnitTest` Robolectric test suite (`ExampleRobolectricTest` + `TimerRobolectricTest`)
 
 ### Pending (Phase 2 — Full Goals, Calendar Heatmap, Insights)
@@ -512,7 +516,22 @@ The visual design follows the 5-screen UI reference image across every core scre
 
 ---
 
-## 12. Resume Prompt
+## 12. Study Timer Mini Alarm Addition (Feature Summary & Architecture)
+
+### Trigger Events
+1. **Pomodoro Focus Complete**: Plays immediately when Focus ends and Break starts (`FOCUS_END:<cycle>`).
+2. **Pomodoro Break Complete**: Plays immediately when Break ends and the next Focus cycle starts (`BREAK_END:<cycle>`).
+3. **Session Goal Reached**: Plays immediately once per session when the user's goal time is reached in Stopwatch or Pomodoro mode (`GOAL`).
+
+### Architecture
+- **`TimerAlarmPlayer`**: Plays a non-looping ~2.8s default notification/alarm chime using `AudioAttributes.USAGE_ALARM` + `CONTENT_TYPE_SONIFICATION` and `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`, auto-stopping and releasing `MediaPlayer` + audio focus cleanly, plus a 400ms one-shot `VibrationEffect` (`VIBRATE`). Respects Android Do Not Disturb (`INTERRUPTION_FILTER_NONE` / priority policies excluding alarms).
+- **`TimerAlarmScheduler` & `TimerAlarmReceiver`**: Computes the earliest next phase/goal `elapsedRealtime` deadline from `ActiveTimerStateEntity` and maintains a backup `AlarmManager.ELAPSED_REALTIME_WAKEUP` trigger (`setExactAndAllowWhileIdle` when `canScheduleExactAlarms()` holds on API 31+, falling back safely to `setAndAllowWhileIdle`). Automatically cancelled on Pause/Stop/Discard/Save/Crash launch and rescheduled on Start/Resume/Skip Break/Phase advance.
+- **Deduplication & Stale Suppression**: `PrefsAlarmDeduplicator` + `TimerRepository` ensure no phase or goal alert replays twice, and `resumeRecoveredSession()` suppresses any phase/goal alarm that already elapsed prior to process death/reboot.
+- **Settings & Backup**: `UserPreferencesRepository` persists `timerAlarmEnabled` (default `true`) and `timerVibrationEnabled` (default `true`), exposed in `MoreScreen` alongside the plain info row `"Alarm volume uses system alarm volume"`, and included in `BackupSettings` while preserving backward-compatible v1 JSON imports.
+
+---
+
+## 13. Resume Prompt
 
 Read this file fully and continue building any remaining Phase 2/3 items without altering the 5-screen UI reference design.
 

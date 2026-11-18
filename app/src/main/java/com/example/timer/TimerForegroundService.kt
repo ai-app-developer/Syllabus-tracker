@@ -74,6 +74,7 @@ class TimerForegroundService : Service() {
         startForeground(NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID, notification)
       }
 
+      TimerAlarmScheduler.syncAlarm(this@TimerForegroundService, meta.state)
       scheduleNextBoundaryAndHeartbeat(app)
     }
 
@@ -94,6 +95,7 @@ class TimerForegroundService : Service() {
           val effectiveRunning =
             state.status == TimerStatus.RUNNING || state.status == TimerStatus.BREAK
           if (!effectiveRunning) {
+            TimerAlarmScheduler.cancelAlarm(this@TimerForegroundService)
             break
           }
 
@@ -110,16 +112,27 @@ class TimerForegroundService : Service() {
             ),
           )
 
-          var nextWaitMs = 30_000L
-          if (state.mode == TimerMode.POMODORO && metrics.currentPhaseRemainingMs > 0L) {
-            nextWaitMs = minOf(nextWaitMs, metrics.currentPhaseRemainingMs)
-          }
-          if (!state.goalNotified && state.status == TimerStatus.RUNNING && state.goalMs != null) {
-            val remainingToGoal = (state.goalMs - metrics.activeFocusMs).coerceAtLeast(1L)
-            nextWaitMs = minOf(nextWaitMs, remainingToGoal)
+          val targetElapsedMs = TimerAlarmScheduler.computeNextTriggerElapsedMs(state)
+          val remainingToTarget =
+            if (targetElapsedMs != null) {
+              (targetElapsedMs - nowElapsed).coerceAtLeast(0L)
+            } else {
+              30_000L
+            }
+          val waitMs = minOf(30_000L, remainingToTarget)
+          if (waitMs > 0L) {
+            delay(waitMs)
+          } else {
+            delay(50L)
           }
 
-          delay(nextWaitMs.coerceAtLeast(250L))
+          if (targetElapsedMs != null && remainingToTarget <= 30_000L) {
+            val afterWakeElapsed = SystemClock.elapsedRealtime()
+            val tinyRemaining = targetElapsedMs - afterWakeElapsed
+            if (tinyRemaining in 1L..500L) {
+              delay(tinyRemaining)
+            }
+          }
 
           app.timerRepository.touchLastKnownWallTime()
           app.timerRepository.checkAndMarkGoalAlertIfReached()

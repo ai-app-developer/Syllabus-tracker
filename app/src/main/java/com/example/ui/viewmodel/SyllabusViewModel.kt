@@ -469,6 +469,18 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
+  fun setTimerAlarmEnabled(enabled: Boolean) {
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) { repository.setTimerAlarmEnabled(enabled) }
+    }
+  }
+
+  fun setTimerVibrationEnabled(enabled: Boolean) {
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) { repository.setTimerVibrationEnabled(enabled) }
+    }
+  }
+
   fun exportBackupToUri(uri: Uri) {
     app.applicationScope.launch(Dispatchers.IO) {
       runCatching {

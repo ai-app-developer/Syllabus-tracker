@@ -352,6 +352,8 @@ class SyllabusRepository(
     prefsRepo.setDailyGoal(backup.settings.dailyGoal)
     prefsRepo.setReminderEnabled(backup.settings.reminderEnabled)
     prefsRepo.setReminderTime(backup.settings.reminderHour, backup.settings.reminderMinute)
+    prefsRepo.setTimerAlarmEnabled(backup.settings.timerAlarmEnabled)
+    prefsRepo.setTimerVibrationEnabled(backup.settings.timerVibrationEnabled)
     if (mode == BackupImportMode.REPLACE) {
       prefsRepo.setLastOpenedBookId(firstInsertedBookId)
     }
@@ -441,6 +443,14 @@ class SyllabusRepository(
 
   suspend fun setReminderTime(hour: Int, minute: Int) {
     prefsRepo.setReminderTime(hour, minute)
+  }
+
+  suspend fun setTimerAlarmEnabled(enabled: Boolean) {
+    prefsRepo.setTimerAlarmEnabled(enabled)
+  }
+
+  suspend fun setTimerVibrationEnabled(enabled: Boolean) {
+    prefsRepo.setTimerVibrationEnabled(enabled)
   }
 
   suspend fun getCompletedTodayCount(): Int {

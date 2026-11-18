@@ -396,6 +396,8 @@ fun SyllabusApp(
           onEditDailyGoal = { viewModel.openDailyGoalDialog() },
           onToggleReminder = { viewModel.setReminderEnabled(it) },
           onEditReminderTime = { viewModel.openTimePicker() },
+          onToggleTimerAlarm = { viewModel.setTimerAlarmEnabled(it) },
+          onToggleTimerVibration = { viewModel.setTimerVibrationEnabled(it) },
           onExportBackupUri = { uri -> viewModel.exportBackupToUri(uri) },
           onImportBackupUri = { uri -> viewModel.inspectBackupUri(uri) },
         )

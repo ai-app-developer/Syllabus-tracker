@@ -18,6 +18,8 @@ data class BackupSettings(
   val reminderEnabled: Boolean = true,
   val reminderHour: Int,
   val reminderMinute: Int,
+  val timerAlarmEnabled: Boolean = true,
+  val timerVibrationEnabled: Boolean = true,
 )
 
 @Serializable

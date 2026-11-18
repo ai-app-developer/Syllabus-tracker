@@ -21,6 +21,8 @@ data class UserPreferences(
   val reminderHour: Int = DEFAULT_REMINDER_HOUR,
   val reminderMinute: Int = DEFAULT_REMINDER_MINUTE,
   val lastOpenedBookId: Long = -1L,
+  val timerAlarmEnabled: Boolean = true,
+  val timerVibrationEnabled: Boolean = true,
 ) {
   companion object {
     const val DEFAULT_DAILY_GOAL = 2
@@ -36,6 +38,8 @@ class UserPreferencesRepository(private val context: Context) {
     val REMINDER_HOUR = intPreferencesKey("reminder_hour")
     val REMINDER_MINUTE = intPreferencesKey("reminder_minute")
     val LAST_OPENED_BOOK_ID = longPreferencesKey("last_opened_book_id")
+    val TIMER_ALARM_ENABLED = booleanPreferencesKey("timer_alarm_enabled")
+    val TIMER_VIBRATION_ENABLED = booleanPreferencesKey("timer_vibration_enabled")
   }
 
   @Volatile
@@ -52,9 +56,13 @@ class UserPreferencesRepository(private val context: Context) {
           reminderMinute =
             (prefs[Keys.REMINDER_MINUTE] ?: UserPreferences.DEFAULT_REMINDER_MINUTE).coerceIn(0, 59),
           lastOpenedBookId = prefs[Keys.LAST_OPENED_BOOK_ID] ?: -1L,
+          timerAlarmEnabled = prefs[Keys.TIMER_ALARM_ENABLED] ?: true,
+          timerVibrationEnabled = prefs[Keys.TIMER_VIBRATION_ENABLED] ?: true,
         )
       }
       .onEach { cachedPrefs = it }
+
+  fun getCachedPreferencesSnapshot(): UserPreferences = cachedPrefs ?: UserPreferences()
 
   suspend fun getCurrentPreferences(): UserPreferences =
     cachedPrefs ?: userPreferences.first().also { cachedPrefs = it }
@@ -83,5 +91,15 @@ class UserPreferencesRepository(private val context: Context) {
   suspend fun setLastOpenedBookId(bookId: Long) {
     cachedPrefs = cachedPrefs?.copy(lastOpenedBookId = bookId)
     context.dataStore.edit { prefs -> prefs[Keys.LAST_OPENED_BOOK_ID] = bookId }
+  }
+
+  suspend fun setTimerAlarmEnabled(enabled: Boolean) {
+    cachedPrefs = cachedPrefs?.copy(timerAlarmEnabled = enabled)
+    context.dataStore.edit { prefs -> prefs[Keys.TIMER_ALARM_ENABLED] = enabled }
+  }
+
+  suspend fun setTimerVibrationEnabled(enabled: Boolean) {
+    cachedPrefs = cachedPrefs?.copy(timerVibrationEnabled = enabled)
+    context.dataStore.edit { prefs -> prefs[Keys.TIMER_VIBRATION_ENABLED] = enabled }
   }
 }

@@ -242,6 +242,7 @@ object NotificationHelper {
     context: Context,
     title: String,
     message: String,
+    silent: Boolean = false,
   ) {
     if (!hasNotificationPermission(context)) return
     ensureNotificationChannel(context)
@@ -266,6 +267,7 @@ object NotificationHelper {
         .setContentText(message)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
         .setContentIntent(contentPendingIntent)
+        .setSilent(silent)
         .setAutoCancel(true)
         .build()
 

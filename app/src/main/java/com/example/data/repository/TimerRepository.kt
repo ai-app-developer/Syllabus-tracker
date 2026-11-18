@@ -9,8 +9,10 @@ import com.example.data.local.entity.ReadingSessionEntity
 import com.example.data.local.entity.SessionEventEntity
 import com.example.timer.ClockProvider
 import com.example.timer.ComputedTimerMetrics
+import com.example.timer.InMemoryAlarmDeduplicator
 import com.example.timer.SessionEventType
 import com.example.timer.SystemClockProvider
+import com.example.timer.TimerAlarmDeduplicator
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.timer.TimerStatus
@@ -63,6 +65,8 @@ class TimerRepository(
   private val onStopService: () -> Unit = {},
   private val onTimerAlert: (TimerAlertType, String, String) -> Unit = { _, _, _ -> },
   private val onSessionsChanged: suspend () -> Unit = {},
+  private val alarmDeduplicator: TimerAlarmDeduplicator = InMemoryAlarmDeduplicator(),
+  private val onSyncAlarm: (ActiveTimerStateEntity?) -> Unit = {},
 ) {
   private val mutex = Mutex()
 
@@ -107,11 +111,14 @@ class TimerRepository(
     mutex.withLock {
       if (sessionStartedInCurrentProcess) return
       val existing = timerDao.getActiveTimerStateOnce() ?: return
+      // Cancel any dangling pre-death/pre-reboot alarm until the user explicitly resumes.
+      onSyncAlarm(null)
       val book = syllabusDao.getBookByIdOnce(existing.bookId)
       val chapters = syllabusDao.getAllChaptersOnce()
       val chapter = chapters.firstOrNull { it.id == existing.chapterId }
       if (book == null || chapter == null) {
         timerDao.clearActiveTimerState()
+        alarmDeduplicator.clearSession(existing.sessionId)
         return
       }
       val recoveryMetrics = TimerMath.computeLastKnownRecoveryMetrics(existing)
@@ -194,6 +201,8 @@ class TimerRepository(
 
       sessionStartedInCurrentProcess = true
       _recoveryPrompt.value = null
+      alarmDeduplicator.clearSession(sessionId)
+      onSyncAlarm(newState)
       onSyncService()
       true
     }
@@ -233,6 +242,7 @@ class TimerRepository(
         )
       }
       sessionStartedInCurrentProcess = true
+      onSyncAlarm(updated)
       onSyncService()
     }
   }
@@ -283,6 +293,7 @@ class TimerRepository(
         )
       }
       sessionStartedInCurrentProcess = true
+      onSyncAlarm(updated)
       onSyncService()
     }
   }
@@ -353,6 +364,7 @@ class TimerRepository(
 
       timerDao.upsertActiveTimerState(updated)
       sessionStartedInCurrentProcess = true
+      onSyncAlarm(updated)
       onSyncService()
     }
   }
@@ -392,6 +404,8 @@ class TimerRepository(
       }
       sessionStartedInCurrentProcess = false
       _recoveryPrompt.value = null
+      alarmDeduplicator.clearSession(current.sessionId)
+      onSyncAlarm(null)
       onStopService()
     }
   }
@@ -428,7 +442,9 @@ class TimerRepository(
           )
         )
       }
+      alarmDeduplicator.markSuppressed("BREAK_END:${current.pomodoroCycle}", current.sessionId)
       sessionStartedInCurrentProcess = true
+      onSyncAlarm(updated)
       onSyncService()
     }
   }
@@ -466,10 +482,13 @@ class TimerRepository(
         }
         val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
         val breakMins = (current.breakDurationMs / 60_000L).coerceAtLeast(1L)
-        onTimerAlert(
-          TimerAlertType.POMODORO_FOCUS_COMPLETE,
-          "Focus complete — $bookName",
-          "Time for a $breakMins min break.",
+        onSyncAlarm(updated)
+        emitAlertOnce(
+          sessionId = current.sessionId,
+          eventKey = "FOCUS_END:${current.pomodoroCycle}",
+          type = TimerAlertType.POMODORO_FOCUS_COMPLETE,
+          title = "Focus complete — $bookName",
+          message = "Time for a $breakMins min break.",
         )
         onSyncService()
       } else if (current.status == TimerStatus.BREAK && current.breakDurationMs > 0L && metrics.currentPhaseRemainingMs == 0L) {
@@ -484,10 +503,13 @@ class TimerRepository(
           )
         timerDao.upsertActiveTimerState(updated)
         val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-        onTimerAlert(
-          TimerAlertType.POMODORO_BREAK_COMPLETE,
-          "Break complete — $bookName",
-          "Cycle ${current.pomodoroCycle + 1} focus started.",
+        onSyncAlarm(updated)
+        emitAlertOnce(
+          sessionId = current.sessionId,
+          eventKey = "BREAK_END:${current.pomodoroCycle}",
+          type = TimerAlertType.POMODORO_BREAK_COMPLETE,
+          title = "Break complete — $bookName",
+          message = "Cycle ${current.pomodoroCycle + 1} focus started.",
         )
         onSyncService()
       }
@@ -504,14 +526,16 @@ class TimerRepository(
       val nowWall = clock.currentTimeMillis()
       val metrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
       if (metrics.activeFocusMs >= goalMs) {
-        timerDao.upsertActiveTimerState(
-          current.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
-        )
+        val updated = current.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
+        timerDao.upsertActiveTimerState(updated)
+        onSyncAlarm(updated)
         val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-        onTimerAlert(
-          TimerAlertType.GOAL_REACHED,
-          "Session goal reached!",
-          "You completed your ${TimerMath.formatGoalWords(goalMs)} goal for $bookName.",
+        emitAlertOnce(
+          sessionId = current.sessionId,
+          eventKey = "GOAL",
+          type = TimerAlertType.GOAL_REACHED,
+          title = "Session goal reached!",
+          message = "You completed your ${TimerMath.formatGoalWords(goalMs)} goal for $bookName.",
         )
       }
     }
@@ -535,6 +559,22 @@ class TimerRepository(
       val nowWall = clock.currentTimeMillis()
       val metrics = TimerMath.computeLastKnownRecoveryMetrics(saved)
 
+      val goalAlreadyPassedBeforeDeath =
+        saved.goalMs != null && metrics.activeFocusMs >= saved.goalMs
+      val resolvedGoalNotified = saved.goalNotified || goalAlreadyPassedBeforeDeath
+      if (resolvedGoalNotified) {
+        alarmDeduplicator.markSuppressed("GOAL", saved.sessionId)
+      }
+
+      if (saved.mode == TimerMode.POMODORO) {
+        val wallDelta = (saved.lastKnownWallTimeMs - saved.phaseStartWallTimeMs).coerceAtLeast(0L)
+        if (saved.status == TimerStatus.RUNNING && saved.focusDurationMs > 0L && wallDelta >= saved.focusDurationMs) {
+          alarmDeduplicator.markSuppressed("FOCUS_END:${saved.pomodoroCycle}", saved.sessionId)
+        } else if (saved.status == TimerStatus.BREAK && saved.breakDurationMs > 0L && wallDelta >= saved.breakDurationMs) {
+          alarmDeduplicator.markSuppressed("BREAK_END:${saved.pomodoroCycle}", saved.sessionId)
+        }
+      }
+
       val targetStatus =
         when (saved.status) {
           TimerStatus.BREAK -> TimerStatus.BREAK
@@ -552,6 +592,7 @@ class TimerRepository(
           pauseStartElapsedMs = null,
           pauseStartWallTimeMs = null,
           lastKnownWallTimeMs = nowWall,
+          goalNotified = resolvedGoalNotified,
           statusBeforeStopSummary = null,
         )
 
@@ -572,6 +613,7 @@ class TimerRepository(
 
       sessionStartedInCurrentProcess = true
       _recoveryPrompt.value = null
+      onSyncAlarm(rebased)
       onSyncService()
     }
   }
@@ -607,6 +649,8 @@ class TimerRepository(
       }
       sessionStartedInCurrentProcess = false
       _recoveryPrompt.value = null
+      alarmDeduplicator.clearSession(candidate.state.sessionId)
+      onSyncAlarm(null)
       onStopService()
     }
   }
@@ -678,11 +722,25 @@ class TimerRepository(
     }
 
     sessionStartedInCurrentProcess = false
+    alarmDeduplicator.clearSession(state.sessionId)
+    onSyncAlarm(null)
     onStopService()
     if (insertedAny) {
       onSessionsChanged()
     }
     return insertedAny
+  }
+
+  private fun emitAlertOnce(
+    sessionId: String,
+    eventKey: String,
+    type: TimerAlertType,
+    title: String,
+    message: String,
+  ) {
+    if (alarmDeduplicator.tryAcquire(eventKey = eventKey, sessionId = sessionId)) {
+      onTimerAlert(type, title, message)
+    }
   }
 
   companion object {

@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:name=".SyllabusApplication"
@@ -104,6 +105,10 @@
 
         <receiver
             android:name=".notifications.StudyReminderReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".timer.TimerAlarmReceiver"
             android:exported="false" />
 
         <receiver

@@ -14,6 +14,9 @@ import com.example.data.repository.SyllabusRepository
 import com.example.data.repository.TimerRepository
 import com.example.notifications.NotificationHelper
 import com.example.notifications.StudyReminderScheduler
+import com.example.timer.PrefsAlarmDeduplicator
+import com.example.timer.TimerAlarmPlayer
+import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerForegroundService
 import com.example.widgets.WidgetUpdater
 import kotlinx.coroutines.CoroutineScope
@@ -42,9 +45,27 @@ class SyllabusApplication : Application() {
       syllabusDao = database.syllabusDao(),
       runInTransaction = { block -> database.withTransaction { block() } },
       onSyncService = { TimerForegroundService.sync(this@SyllabusApplication) },
-      onStopService = { TimerForegroundService.stop(this@SyllabusApplication) },
+      onStopService = {
+        TimerAlarmPlayer.stopAll()
+        TimerForegroundService.stop(this@SyllabusApplication)
+      },
       onTimerAlert = { _, title, message ->
-        NotificationHelper.showTimerAlert(this@SyllabusApplication, title, message)
+        val prefs = preferencesRepository.getCachedPreferencesSnapshot()
+        TimerAlarmPlayer.playMiniAlarm(
+          context = this@SyllabusApplication,
+          playSound = prefs.timerAlarmEnabled,
+          playVibration = prefs.timerVibrationEnabled,
+        )
+        NotificationHelper.showTimerAlert(
+          context = this@SyllabusApplication,
+          title = title,
+          message = message,
+          silent = true,
+        )
+      },
+      alarmDeduplicator = PrefsAlarmDeduplicator(this@SyllabusApplication),
+      onSyncAlarm = { activeState ->
+        TimerAlarmScheduler.syncAlarm(this@SyllabusApplication, activeState)
       },
     )
   }

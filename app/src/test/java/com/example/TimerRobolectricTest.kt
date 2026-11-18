@@ -1,15 +1,27 @@
 package com.example
 
+import android.app.NotificationManager
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.backup.BackupImportMode
+import com.example.data.backup.BackupManager
+import com.example.data.backup.BackupValidationResult
 import com.example.data.local.SyllabusDatabase
+import com.example.data.local.entity.ActiveTimerStateEntity
 import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
+import com.example.data.preferences.UserPreferences
+import com.example.data.preferences.UserPreferencesRepository
+import com.example.data.repository.SyllabusRepository
+import com.example.data.repository.TimerAlertType
 import com.example.data.repository.TimerRepository
 import com.example.timer.ClockProvider
+import com.example.timer.PrefsAlarmDeduplicator
+import com.example.timer.TimerAlarmPlayer
+import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.timer.TimerStatus
@@ -325,4 +337,244 @@ class TimerRobolectricTest {
     assertEquals("Others", result.bookSlices[4].bookName)
     assertEquals(30 * 60_000L, result.bookSlices[4].totalMs)
   }
+
+  @Test
+  fun `pomodoro fires focus end and break end mini alarms once per cycle and skipBreak suppresses break end`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Math"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Calculus", number = 1))
+
+      val firedAlerts = mutableListOf<TimerAlertType>()
+      val syncedAlarms = mutableListOf<Long?>()
+      val dedup = PrefsAlarmDeduplicator(context)
+      val alarmRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onTimerAlert = { type, _, _ -> firedAlerts.add(type) },
+          alarmDeduplicator = dedup,
+          onSyncAlarm = { state ->
+            syncedAlarms.add(TimerAlarmScheduler.computeNextTriggerElapsedMs(state))
+          },
+        )
+
+      assertTrue(
+        alarmRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      assertEquals(clock.elapsedMs + 25 * 60_000L, syncedAlarms.last())
+
+      // Advance to Focus completion -> fires once even if checked multiple times
+      clock.advance(25 * 60_000L)
+      alarmRepo.advancePomodoroPhaseIfDue()
+      alarmRepo.advancePomodoroPhaseIfDue()
+      assertEquals(listOf(TimerAlertType.POMODORO_FOCUS_COMPLETE), firedAlerts)
+      assertEquals(clock.elapsedMs + 5 * 60_000L, syncedAlarms.last())
+
+      // Advance to Break completion -> fires once and advances to cycle 2
+      clock.advance(5 * 60_000L)
+      alarmRepo.advancePomodoroPhaseIfDue()
+      assertEquals(
+        listOf(TimerAlertType.POMODORO_FOCUS_COMPLETE, TimerAlertType.POMODORO_BREAK_COMPLETE),
+        firedAlerts,
+      )
+
+      // Reach cycle 2 focus end, then skip break -> cycle 2 break end never fires
+      clock.advance(25 * 60_000L)
+      alarmRepo.advancePomodoroPhaseIfDue()
+      assertEquals(3, firedAlerts.size)
+      alarmRepo.skipBreak()
+      clock.advance(5 * 60_000L)
+      alarmRepo.advancePomodoroPhaseIfDue()
+      // Cycle 3 focus not yet finished at +5m (only 5/25m elapsed), and skipped break 2 did NOT fire
+      assertEquals(3, firedAlerts.size)
+    }
+
+  @Test
+  fun `goal alarm fires once per session and pause cancels then resume schedules remaining time`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Chemistry"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Acids", number = 1))
+
+      val firedAlerts = mutableListOf<TimerAlertType>()
+      val scheduledTriggers = mutableListOf<Long?>()
+      val alarmRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onTimerAlert = { type, _, _ -> firedAlerts.add(type) },
+          onSyncAlarm = { state ->
+            scheduledTriggers.add(TimerAlarmScheduler.computeNextTriggerElapsedMs(state))
+          },
+        )
+
+      assertTrue(
+        alarmRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.STOPWATCH,
+          goalMinutes = 10,
+        )
+      )
+      assertEquals(clock.elapsedMs + 10 * 60_000L, scheduledTriggers.last())
+
+      // Pause after 4 minutes -> cancels alarm while paused
+      clock.advance(4 * 60_000L)
+      alarmRepo.pauseSession()
+      assertNull(scheduledTriggers.last())
+
+      // Stay paused for 20 minutes -> no goal alarm
+      clock.advance(20 * 60_000L)
+      alarmRepo.checkAndMarkGoalAlertIfReached()
+      assertTrue(firedAlerts.isEmpty())
+
+      // Resume -> trigger must be nowElapsed + remaining 6 minutes
+      alarmRepo.resumeSession()
+      assertEquals(clock.elapsedMs + 6 * 60_000L, scheduledTriggers.last())
+
+      // Advance 6 minutes -> Goal alarm fires once; subsequent checks never duplicate
+      clock.advance(6 * 60_000L)
+      alarmRepo.checkAndMarkGoalAlertIfReached()
+      alarmRepo.checkAndMarkGoalAlertIfReached()
+      assertEquals(listOf(TimerAlertType.GOAL_REACHED), firedAlerts)
+      assertNull(scheduledTriggers.last())
+    }
+
+  @Test
+  fun `crash recovery cancels stale alarms and suppresses goal or phase alerts already passed`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Physics"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Motion", number = 1))
+
+      val firedAlerts = mutableListOf<TimerAlertType>()
+      val scheduledTriggers = mutableListOf<Long?>()
+
+      assertTrue(
+        repo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.STOPWATCH,
+          goalMinutes = 5,
+        )
+      )
+      // Simulate process running 6m (past 5m goal) and dying before goal alert ran cleanly
+      clock.advance(6 * 60_000L)
+      repo.touchLastKnownWallTime()
+
+      val recoveredRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onTimerAlert = { type, _, _ -> firedAlerts.add(type) },
+          onSyncAlarm = { state ->
+            scheduledTriggers.add(TimerAlarmScheduler.computeNextTriggerElapsedMs(state))
+          },
+        )
+
+      recoveredRepo.checkUnfinishedSessionOnLaunch()
+      assertNotNull(recoveredRepo.recoveryPrompt.first())
+      assertNull(scheduledTriggers.last())
+
+      recoveredRepo.resumeRecoveredSession()
+      clock.advance(10_000L)
+      recoveredRepo.checkAndMarkGoalAlertIfReached()
+      assertTrue(firedAlerts.isEmpty())
+    }
+
+  @Test
+  fun `dnd interruption filter allows alarms only when policy permits alarms`() {
+    assertFalse(
+      TimerAlarmPlayer.isBlockedByDoNotDisturb(
+        interruptionFilter = NotificationManager.INTERRUPTION_FILTER_ALL,
+        priorityCategories = 0,
+      )
+    )
+    assertTrue(
+      TimerAlarmPlayer.isBlockedByDoNotDisturb(
+        interruptionFilter = NotificationManager.INTERRUPTION_FILTER_NONE,
+        priorityCategories = NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS,
+      )
+    )
+    assertFalse(
+      TimerAlarmPlayer.isBlockedByDoNotDisturb(
+        interruptionFilter = NotificationManager.INTERRUPTION_FILTER_ALARMS,
+        priorityCategories = 0,
+      )
+    )
+    assertTrue(
+      TimerAlarmPlayer.isBlockedByDoNotDisturb(
+        interruptionFilter = NotificationManager.INTERRUPTION_FILTER_PRIORITY,
+        priorityCategories = 0,
+      )
+    )
+    assertFalse(
+      TimerAlarmPlayer.isBlockedByDoNotDisturb(
+        interruptionFilter = NotificationManager.INTERRUPTION_FILTER_PRIORITY,
+        priorityCategories = NotificationManager.Policy.PRIORITY_CATEGORY_ALARMS,
+      )
+    )
+  }
+
+  @Test
+  fun `backup supports timer alarm and vibration toggles and imports legacy v1 JSON cleanly`() =
+    runTest {
+      val prefs = UserPreferencesRepository(context)
+      val syllabusRepo = SyllabusRepository(db.syllabusDao(), prefs)
+      val bookId = syllabusRepo.addBook("English")
+      syllabusRepo.addChapter(bookId, "Essay", 1, false)
+      syllabusRepo.setTimerAlarmEnabled(false)
+      syllabusRepo.setTimerVibrationEnabled(false)
+
+      val exportedJson = syllabusRepo.exportBackupJson("1.0")
+      val valid = BackupManager.parseAndValidate(exportedJson)
+      assertTrue(valid is BackupValidationResult.Valid)
+      val parsed = (valid as BackupValidationResult.Valid).backup
+      assertFalse(parsed.settings.timerAlarmEnabled)
+      assertFalse(parsed.settings.timerVibrationEnabled)
+
+      // Legacy v1 JSON missing timerAlarmEnabled & timerVibrationEnabled must still validate & default true
+      val legacyJson =
+        """
+        {
+          "appVersion": "1.0",
+          "schemaVersion": 1,
+          "exportedAt": 1763320000000,
+          "settings": {
+            "dailyGoal": 2,
+            "reminderEnabled": true,
+            "reminderHour": 20,
+            "reminderMinute": 0
+          },
+          "books": [
+            { "id": 1, "name": "Math", "createdAt": 1763310000000 }
+          ],
+          "chapters": [
+            { "id": 10, "bookId": 1, "name": "Sets", "number": 1, "isCompleted": false, "completedAt": null, "createdAt": 1763310000000 }
+          ]
+        }
+        """.trimIndent()
+      val legacyValid = BackupManager.parseAndValidate(legacyJson)
+      assertTrue(legacyValid is BackupValidationResult.Valid)
+      val restoredPrefs =
+        syllabusRepo.importBackup((legacyValid as BackupValidationResult.Valid).backup, BackupImportMode.REPLACE)
+      assertTrue(restoredPrefs.timerAlarmEnabled)
+      assertTrue(restoredPrefs.timerVibrationEnabled)
+    }
 }

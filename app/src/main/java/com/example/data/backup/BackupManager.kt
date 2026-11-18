@@ -43,6 +43,8 @@ object BackupManager {
             reminderEnabled = settings.reminderEnabled,
             reminderHour = settings.reminderHour.coerceIn(0, 23),
             reminderMinute = settings.reminderMinute.coerceIn(0, 59),
+            timerAlarmEnabled = settings.timerAlarmEnabled,
+            timerVibrationEnabled = settings.timerVibrationEnabled,
           ),
         books =
           books.map { book ->
