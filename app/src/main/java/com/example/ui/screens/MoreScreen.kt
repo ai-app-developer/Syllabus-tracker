@@ -29,8 +29,10 @@ import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -76,6 +78,9 @@ import java.util.Locale
 fun MoreScreen(
   preferences: UserPreferences,
   innerPadding: PaddingValues,
+  isTimerRunning: Boolean,
+  onOpenStudyTimer: () -> Unit,
+  onOpenReadingHistory: () -> Unit,
   onEditDailyGoal: () -> Unit,
   onToggleReminder: (Boolean) -> Unit,
   onEditReminderTime: () -> Unit,
@@ -116,7 +121,7 @@ fun MoreScreen(
     }
 
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground).padding(innerPadding),
+    modifier = Modifier.fillMaxSize().background(AppBackground),
     contentAlignment = Alignment.TopCenter,
   ) {
     Column(
@@ -124,7 +129,12 @@ fun MoreScreen(
         Modifier.widthIn(max = 600.dp)
           .fillMaxWidth()
           .verticalScroll(rememberScrollState())
-          .padding(horizontal = 20.dp, vertical = 16.dp),
+          .padding(
+            top = innerPadding.calculateTopPadding() + 16.dp,
+            bottom = innerPadding.calculateBottomPadding() + 16.dp,
+            start = 20.dp,
+            end = 20.dp,
+          ),
     ) {
       Text(
         text = stringResource(R.string.more_title),
@@ -133,6 +143,117 @@ fun MoreScreen(
       )
 
       Spacer(modifier = Modifier.height(18.dp))
+
+      Text(
+        text = "Reading Timer",
+        style = MaterialTheme.typography.labelLarge,
+        color = TextSecondary,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+
+      Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = CardSurface,
+        border = BorderStroke(1.dp, HairlineBorder),
+        shadowElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column {
+          Surface(
+            onClick = onOpenStudyTimer,
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth().testTag("more_study_timer_row"),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LightIndigoTint),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Outlined.Timer,
+                  contentDescription = null,
+                  tint = PrimaryIndigo,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(14.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = if (isTimerRunning) "Active Study Session" else "Study Timer",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Text(
+                  text =
+                    if (isTimerRunning) "Tap to open live reading timer"
+                    else "Stopwatch & Pomodoro study timer",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Open Study Timer",
+                tint = TextSecondary,
+              )
+            }
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
+          Surface(
+            onClick = onOpenReadingHistory,
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth().testTag("more_reading_history_row"),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LightIndigoTint),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Outlined.History,
+                  contentDescription = null,
+                  tint = PrimaryIndigo,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(14.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Reading History",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Text(
+                  text = "Search, filter, edit, or delete logged sessions",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Open Reading History",
+                tint = TextSecondary,
+              )
+            }
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(20.dp))
 
       Text(
         text = "Study Goal",

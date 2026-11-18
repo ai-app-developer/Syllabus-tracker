@@ -23,15 +23,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -51,6 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -60,23 +66,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.repository.BookProgressSummary
+import com.example.timer.TimerMath
+import com.example.ui.theme.AmbientShadow
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightGreenTint
 import com.example.ui.theme.LightIndigoTint
 import com.example.ui.theme.PrimaryIndigo
 import com.example.ui.theme.ProgressTrack
-import com.example.ui.theme.SuccessGreen
+import com.example.ui.theme.SoftLavenderBorder
+import com.example.ui.theme.SoftLavenderCardEnd
+import com.example.ui.theme.SoftLavenderCardStart
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.VibrantGreen
 import com.example.ui.viewmodel.BookFilter
 import com.example.ui.viewmodel.BookSortOrder
+import com.example.ui.viewmodel.LiveStudyingUiState
 import com.example.ui.viewmodel.SyllabusUiState
 
 @Composable
 fun BooksScreen(
   uiState: SyllabusUiState,
+  todayStudyMs: Long,
+  liveStudying: LiveStudyingUiState,
   innerPadding: PaddingValues,
   onToggleSearch: () -> Unit,
   onSearchQueryChange: (String) -> Unit,
@@ -84,17 +97,25 @@ fun BooksScreen(
   onSelectSortOrder: (BookSortOrder) -> Unit,
   onBookClick: (Long) -> Unit,
   onAddBookClick: () -> Unit,
+  onStudyTimerClick: () -> Unit,
 ) {
   var overflowExpanded by remember { mutableStateOf(false) }
 
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground).padding(innerPadding),
+    modifier = Modifier.fillMaxSize().background(AppBackground),
     contentAlignment = Alignment.TopCenter,
   ) {
     Column(
-      modifier = Modifier.widthIn(max = 600.dp).fillMaxSize().padding(horizontal = 20.dp),
+      modifier =
+        Modifier.widthIn(max = 600.dp)
+          .fillMaxSize()
+          .padding(
+            top = innerPadding.calculateTopPadding(),
+            start = 20.dp,
+            end = 20.dp,
+          ),
     ) {
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -103,7 +124,9 @@ fun BooksScreen(
       ) {
         Text(
           text = stringResource(R.string.books_label),
-          style = MaterialTheme.typography.headlineLarge,
+          fontSize = 30.sp,
+          fontWeight = FontWeight.Bold,
+          letterSpacing = (-0.5).sp,
           color = TextPrimary,
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -199,7 +222,7 @@ fun BooksScreen(
             }
           },
           singleLine = true,
-          shape = RoundedCornerShape(12.dp),
+          shape = RoundedCornerShape(14.dp),
           colors =
             OutlinedTextFieldDefaults.colors(
               focusedBorderColor = PrimaryIndigo,
@@ -238,132 +261,251 @@ fun BooksScreen(
         )
       }
 
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
       val books = uiState.filteredBooks
+      val bottomPad = innerPadding.calculateBottomPadding() + 14.dp
+
       if (uiState.snapshot.books.isEmpty()) {
-        Box(
-          modifier = Modifier.weight(1f).fillMaxWidth(),
-          contentAlignment = Alignment.Center,
+        Column(
+          modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = bottomPad),
+          verticalArrangement = Arrangement.SpaceBetween,
         ) {
-          Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = CardSurface,
-            border = BorderStroke(1.dp, HairlineBorder),
-            modifier = Modifier.fillMaxWidth(),
+          Box(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentAlignment = Alignment.Center,
           ) {
-            Column(
-              modifier = Modifier.padding(28.dp),
-              horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-              Box(
-                modifier =
-                  Modifier.size(56.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(LightIndigoTint),
-                contentAlignment = Alignment.Center,
-              ) {
-                Icon(
-                  imageVector = Icons.AutoMirrored.Outlined.MenuBook,
-                  contentDescription = null,
-                  tint = PrimaryIndigo,
-                  modifier = Modifier.size(28.dp),
-                )
-              }
-              Spacer(modifier = Modifier.height(14.dp))
-              Text(
-                text = "No books yet",
-                style = MaterialTheme.typography.titleLarge,
-                color = TextPrimary,
-              )
-              Spacer(modifier = Modifier.height(4.dp))
-              Text(
-                text = "Add your first subject or textbook to track chapters.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary,
-              )
-              Spacer(modifier = Modifier.height(18.dp))
-              Button(
-                onClick = onAddBookClick,
-                shape = RoundedCornerShape(24.dp),
-                colors =
-                  ButtonDefaults.buttonColors(
-                    containerColor = PrimaryIndigo,
-                    contentColor = Color.White,
+            val emptyShape = RoundedCornerShape(20.dp)
+            Surface(
+              shape = emptyShape,
+              color = CardSurface,
+              border = BorderStroke(1.dp, HairlineBorder),
+              modifier =
+                Modifier.fillMaxWidth()
+                  .shadow(
+                    elevation = 8.dp,
+                    shape = emptyShape,
+                    clip = false,
+                    ambientColor = AmbientShadow,
+                    spotColor = AmbientShadow,
                   ),
-                modifier = Modifier.height(48.dp).testTag("empty_add_book_button"),
+            ) {
+              Column(
+                modifier = Modifier.padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
               ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(stringResource(R.string.add_book))
+                Box(
+                  modifier =
+                    Modifier.size(56.dp)
+                      .clip(RoundedCornerShape(14.dp))
+                      .background(LightIndigoTint),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.MenuBook,
+                    contentDescription = null,
+                    tint = PrimaryIndigo,
+                    modifier = Modifier.size(28.dp),
+                  )
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                  text = "No books yet",
+                  style = MaterialTheme.typography.titleLarge,
+                  color = TextPrimary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                  text = "Add your first subject or textbook to track chapters.",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+                Button(
+                  onClick = onAddBookClick,
+                  shape = RoundedCornerShape(26.dp),
+                  colors =
+                    ButtonDefaults.buttonColors(
+                      containerColor = PrimaryIndigo,
+                      contentColor = Color.White,
+                    ),
+                  modifier = Modifier.height(48.dp).testTag("empty_add_book_button"),
+                ) {
+                  Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(stringResource(R.string.add_book))
+                }
               }
             }
           }
-        }
-      } else if (books.isEmpty()) {
-        Box(
-          modifier = Modifier.weight(1f).fillMaxWidth(),
-          contentAlignment = Alignment.Center,
-        ) {
-          Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-              text = "No matching books",
-              style = MaterialTheme.typography.titleMedium,
-              color = TextPrimary,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = "Try a different filter or search term.",
-              style = MaterialTheme.typography.bodyMedium,
-              color = TextSecondary,
-            )
-          }
+
+          BooksStudyTimerCard(
+            todayStudyMs = todayStudyMs,
+            liveStudying = liveStudying,
+            onClick = onStudyTimerClick,
+          )
         }
       } else {
         LazyColumn(
           modifier = Modifier.weight(1f).fillMaxWidth(),
           verticalArrangement = Arrangement.spacedBy(12.dp),
-          contentPadding = PaddingValues(bottom = 12.dp),
+          contentPadding = PaddingValues(bottom = bottomPad),
         ) {
-          items(books, key = { it.book.id }) { summary ->
-            BookProgressCard(
-              summary = summary,
-              onClick = { onBookClick(summary.book.id) },
+          if (books.isEmpty()) {
+            item {
+              Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+              ) {
+                Text(
+                  text = "No matching books",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                  text = "Try a different filter or search term.",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+            }
+          } else {
+            itemsIndexed(books, key = { _, it -> it.book.id }) { index, summary ->
+              BookProgressCard(
+                summary = summary,
+                colorSlot = index,
+                onClick = { onBookClick(summary.book.id) },
+              )
+            }
+          }
+
+          item {
+            Spacer(modifier = Modifier.height(2.dp))
+            Button(
+              onClick = onAddBookClick,
+              shape = RoundedCornerShape(26.dp),
+              colors =
+                ButtonDefaults.buttonColors(
+                  containerColor = LightIndigoTint,
+                  contentColor = PrimaryIndigo,
+                ),
+              elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
+              modifier = Modifier.fillMaxWidth().height(52.dp).testTag("add_book_button"),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = stringResource(R.string.add_book),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+              )
+            }
+          }
+
+          item {
+            BooksStudyTimerCard(
+              todayStudyMs = todayStudyMs,
+              liveStudying = liveStudying,
+              onClick = onStudyTimerClick,
             )
           }
         }
       }
+    }
+  }
+}
 
-      if (uiState.snapshot.books.isNotEmpty()) {
-        Spacer(modifier = Modifier.height(8.dp))
-        Button(
-          onClick = onAddBookClick,
-          shape = RoundedCornerShape(26.dp),
-          colors =
-            ButtonDefaults.buttonColors(
-              containerColor = LightIndigoTint,
-              contentColor = PrimaryIndigo,
-            ),
-          elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
-          modifier =
-            Modifier.fillMaxWidth()
-              .padding(bottom = 16.dp)
-              .height(52.dp)
-              .testTag("add_book_button"),
-        ) {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
+@Composable
+private fun BooksStudyTimerCard(
+  todayStudyMs: Long,
+  liveStudying: LiveStudyingUiState,
+  onClick: () -> Unit,
+) {
+  val shape = RoundedCornerShape(20.dp)
+  val totalMs =
+    if (liveStudying.isRunningOrPaused) {
+      todayStudyMs + liveStudying.metrics.activeFocusMs
+    } else {
+      todayStudyMs
+    }
+  val subtitle =
+    if (liveStudying.isRunningOrPaused) {
+      "Active: ${liveStudying.primaryClockDisplay} • Today: ${TimerMath.formatHoursMinutes(totalMs)}"
+    } else {
+      "Today: ${TimerMath.formatHoursMinutes(todayStudyMs)}"
+    }
+
+  Surface(
+    onClick = onClick,
+    shape = shape,
+    color = Color.Transparent,
+    border = BorderStroke(1.dp, SoftLavenderBorder),
+    modifier =
+      Modifier.fillMaxWidth()
+        .shadow(
+          elevation = 8.dp,
+          shape = shape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        )
+        .testTag("books_study_timer_card"),
+  ) {
+    Row(
+      modifier =
+        Modifier.fillMaxWidth()
+          .background(
+            Brush.horizontalGradient(
+              colors = listOf(SoftLavenderCardStart, SoftLavenderCardEnd)
+            )
           )
-          Spacer(modifier = Modifier.width(8.dp))
-          Text(
-            text = stringResource(R.string.add_book),
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-          )
-        }
+          .padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Box(
+        modifier =
+          Modifier.size(44.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFE3DCFE)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.Timer,
+          contentDescription = null,
+          tint = PrimaryIndigo,
+          modifier = Modifier.size(23.dp),
+        )
       }
+      Spacer(modifier = Modifier.width(14.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = stringResource(R.string.study_timer_title),
+          fontSize = 16.sp,
+          fontWeight = FontWeight.Bold,
+          color = TextPrimary,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+          text = subtitle,
+          fontSize = 13.sp,
+          fontWeight = FontWeight.Medium,
+          color = PrimaryIndigo,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      Spacer(modifier = Modifier.width(10.dp))
+      Icon(
+        imageVector = Icons.Filled.BarChart,
+        contentDescription = "Open study timer",
+        tint = PrimaryIndigo,
+        modifier = Modifier.size(26.dp),
+      )
     }
   }
 }
@@ -399,38 +541,111 @@ private fun FilterChipPill(
   }
 }
 
+private enum class BookBadgeStyle {
+  BOOK_VIOLET,
+  SIGMA_BLUE,
+  AA_GREEN,
+  SCIENCE_AMBER,
+}
+
+private fun resolveBookBadgeStyle(bookName: String, fallbackSlot: Int): BookBadgeStyle {
+  val lower = bookName.lowercase()
+  return when {
+    lower.contains("math") || lower.contains("algebra") || lower.contains("calc") ->
+      BookBadgeStyle.SIGMA_BLUE
+    lower.contains("english") || lower.contains("grammar") || lower.contains("writing") ->
+      BookBadgeStyle.AA_GREEN
+    lower.contains("science") ||
+      lower.contains("phys") ||
+      lower.contains("chem") ||
+      lower.contains("bio") -> BookBadgeStyle.SCIENCE_AMBER
+    lower.contains("bangla") || lower.contains("hist") || lower.contains("lit") ->
+      BookBadgeStyle.BOOK_VIOLET
+    else ->
+      when (fallbackSlot.mod(4)) {
+        0 -> BookBadgeStyle.BOOK_VIOLET
+        1 -> BookBadgeStyle.SIGMA_BLUE
+        2 -> BookBadgeStyle.AA_GREEN
+        else -> BookBadgeStyle.SCIENCE_AMBER
+      }
+  }
+}
+
 @Composable
 fun BookProgressCard(
   summary: BookProgressSummary,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  colorSlot: Int = (summary.book.id % 4L).toInt(),
 ) {
-  val iconBg = if (summary.isCompleted) LightGreenTint else LightIndigoTint
-  val iconTint = if (summary.isCompleted) SuccessGreen else PrimaryIndigo
-  val barFill = if (summary.isCompleted) SuccessGreen else PrimaryIndigo
+  val badgeStyle = remember(summary.book.name, colorSlot) {
+    resolveBookBadgeStyle(summary.book.name, colorSlot)
+  }
+  val (iconBg, iconTint) =
+    when (badgeStyle) {
+      BookBadgeStyle.BOOK_VIOLET -> Color(0xFFF1EDFF) to Color(0xFF7C5CF0)
+      BookBadgeStyle.SIGMA_BLUE -> Color(0xFFE9F2FF) to Color(0xFF3B82F6)
+      BookBadgeStyle.AA_GREEN -> Color(0xFFE8F8EE) to Color(0xFF22C55E)
+      BookBadgeStyle.SCIENCE_AMBER -> Color(0xFFFEF3E6) to Color(0xFFF59E0B)
+    }
+  val barFill = if (summary.isCompleted) VibrantGreen else PrimaryIndigo
+  val cardShape = RoundedCornerShape(20.dp)
 
   Surface(
     onClick = onClick,
-    shape = RoundedCornerShape(16.dp),
+    shape = cardShape,
     color = CardSurface,
     border = BorderStroke(1.dp, HairlineBorder),
-    shadowElevation = 1.dp,
-    modifier = modifier.fillMaxWidth().testTag("book_card_${summary.book.id}"),
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .shadow(
+          elevation = 8.dp,
+          shape = cardShape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        )
+        .testTag("book_card_${summary.book.id}"),
   ) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(14.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Box(
-        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(iconBg),
+        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(iconBg),
         contentAlignment = Alignment.Center,
       ) {
-        Icon(
-          imageVector = Icons.AutoMirrored.Outlined.MenuBook,
-          contentDescription = null,
-          tint = iconTint,
-          modifier = Modifier.size(24.dp),
-        )
+        when (badgeStyle) {
+          BookBadgeStyle.SIGMA_BLUE ->
+            Text(
+              text = "Σ",
+              fontSize = 22.sp,
+              fontWeight = FontWeight.SemiBold,
+              color = iconTint,
+            )
+          BookBadgeStyle.AA_GREEN ->
+            Text(
+              text = "Aa",
+              fontSize = 18.sp,
+              fontWeight = FontWeight.Bold,
+              color = iconTint,
+            )
+          BookBadgeStyle.SCIENCE_AMBER ->
+            Icon(
+              imageVector = Icons.Outlined.Science,
+              contentDescription = null,
+              tint = iconTint,
+              modifier = Modifier.size(24.dp),
+            )
+          BookBadgeStyle.BOOK_VIOLET ->
+            Icon(
+              imageVector = Icons.AutoMirrored.Outlined.MenuBook,
+              contentDescription = null,
+              tint = iconTint,
+              modifier = Modifier.size(24.dp),
+            )
+        }
       }
 
       Spacer(modifier = Modifier.width(14.dp))
@@ -443,7 +658,8 @@ fun BookProgressCard(
         ) {
           Text(
             text = summary.book.name,
-            style = MaterialTheme.typography.titleMedium,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
             color = TextPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -454,7 +670,7 @@ fun BookProgressCard(
             Text(
               text = "${summary.percentage}%",
               fontSize = 14.sp,
-              fontWeight = FontWeight.SemiBold,
+              fontWeight = FontWeight.Bold,
               color = TextPrimary,
             )
             Spacer(modifier = Modifier.width(4.dp))
@@ -470,7 +686,7 @@ fun BookProgressCard(
         Spacer(modifier = Modifier.height(2.dp))
         Text(
           text = "${summary.completedChapters} / ${summary.totalChapters} chapters",
-          style = MaterialTheme.typography.bodyMedium,
+          fontSize = 13.sp,
           color = TextSecondary,
         )
 

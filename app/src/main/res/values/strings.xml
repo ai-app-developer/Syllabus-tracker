@@ -27,6 +27,7 @@
     <string name="progress_title">Progress</string>
     <string name="tab_overall">Overall</string>
     <string name="tab_by_book">By Book</string>
+    <string name="tab_timer">Timer</string>
     <string name="syllabus_completed">Syllabus Completed</string>
     <string name="study_trend">Study Trend</string>
     <string name="this_week">This Week</string>
@@ -34,6 +35,13 @@
     <string name="more_title">More</string>
     <string name="notification_channel_name">Daily Study Reminders</string>
     <string name="notification_channel_desc">Reminds you daily about remaining chapters to reach your study goal.</string>
+    <string name="timer_ongoing_channel_name">Reading Timer</string>
+    <string name="timer_ongoing_channel_desc">Displays live study session progress and quick Pause/Stop controls.</string>
+    <string name="timer_alerts_channel_name">Timer Milestone Alerts</string>
+    <string name="timer_alerts_channel_desc">Notifies when a Pomodoro phase or session study goal completes.</string>
+    <string name="study_timer_title">Study Timer</string>
+    <string name="studying_title">Studying</string>
+    <string name="reading_history_title">Reading History</string>
     <string name="widget_overview_name">Overview</string>
     <string name="widget_overview_desc">Shows overall syllabus completion ring and total books, chapters, and completed count.</string>
     <string name="widget_dark_progress_name">Dark Progress</string>

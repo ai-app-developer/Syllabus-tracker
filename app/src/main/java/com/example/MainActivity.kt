@@ -51,19 +51,28 @@ import com.example.ui.components.DailyGoalDialog
 import com.example.ui.components.ImportBackupConfirmDialog
 import com.example.ui.components.ReminderTimePickerDialog
 import com.example.ui.components.SyllabusBottomBar
+import com.example.ui.components.TimerRecoveryDialog
 import com.example.ui.navigation.BookDetailRoute
 import com.example.ui.navigation.BooksRoute
 import com.example.ui.navigation.HomeRoute
 import com.example.ui.navigation.MoreRoute
 import com.example.ui.navigation.ProgressRoute
+import com.example.ui.navigation.ReadingHistoryRoute
+import com.example.ui.navigation.StudyTimerSetupRoute
+import com.example.ui.navigation.StudyingRoute
 import com.example.ui.screens.BookDetailScreen
 import com.example.ui.screens.BooksScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.MoreScreen
 import com.example.ui.screens.ProgressScreen
+import com.example.ui.screens.ReadingHistoryScreen
+import com.example.ui.screens.StudyTimerSetupScreen
+import com.example.ui.screens.StudyingScreen
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.SyllabusTrackerTheme
 import com.example.ui.viewmodel.SyllabusViewModel
+import com.example.ui.viewmodel.TimerUiEvent
+import com.example.ui.viewmodel.TimerViewModel
 import com.example.widgets.WidgetIntents
 import com.example.widgets.WidgetUpdater
 import kotlinx.coroutines.launch
@@ -76,6 +85,7 @@ data class PendingWidgetNav(
 
 class MainActivity : ComponentActivity() {
   private var pendingWidgetNav by mutableStateOf<PendingWidgetNav?>(null)
+  private var pendingTimerAction by mutableStateOf<Pair<Long, String>?>(null)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -88,6 +98,8 @@ class MainActivity : ComponentActivity() {
         SyllabusApp(
           pendingWidgetNav = pendingWidgetNav,
           onConsumeWidgetNav = { pendingWidgetNav = null },
+          pendingTimerAction = pendingTimerAction,
+          onConsumeTimerAction = { pendingTimerAction = null },
         )
       }
     }
@@ -100,6 +112,12 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun handleIntent(intent: Intent?) {
+    val timerAction = intent?.getStringExtra(NotificationHelper.EXTRA_TIMER_ACTION)
+    if (timerAction != null) {
+      pendingTimerAction = System.nanoTime() to timerAction
+      intent.removeExtra(NotificationHelper.EXTRA_TIMER_ACTION)
+    }
+
     val action = intent?.getStringExtra(WidgetIntents.EXTRA_WIDGET_ACTION) ?: return
     val bookId =
       if (intent.hasExtra(WidgetIntents.EXTRA_BOOK_ID)) {
@@ -121,9 +139,13 @@ class MainActivity : ComponentActivity() {
 fun SyllabusApp(
   pendingWidgetNav: PendingWidgetNav? = null,
   onConsumeWidgetNav: () -> Unit = {},
+  pendingTimerAction: Pair<Long, String>? = null,
+  onConsumeTimerAction: () -> Unit = {},
   viewModel: SyllabusViewModel = viewModel(),
+  timerViewModel: TimerViewModel = viewModel(),
 ) {
   val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+  val timerUiState by timerViewModel.uiState.collectAsStateWithLifecycle()
   val navController = rememberNavController()
   val backStackEntry by navController.currentBackStackEntryAsState()
   val currentDestination = backStackEntry?.destination
@@ -134,11 +156,17 @@ fun SyllabusApp(
 
   DisposableEffect(lifecycleOwner) {
     val observer = LifecycleEventObserver { _, event ->
-      if (event == Lifecycle.Event.ON_RESUME) {
-        val app = context.applicationContext as? SyllabusApplication
-        app?.applicationScope?.launch {
-          WidgetUpdater.updateNow(app)
+      when (event) {
+        Lifecycle.Event.ON_RESUME -> {
+          val app = context.applicationContext as? SyllabusApplication
+          app?.applicationScope?.launch {
+            WidgetUpdater.updateNow(app)
+          }
         }
+        Lifecycle.Event.ON_STOP -> {
+          timerViewModel.touchLastKnownWallTime()
+        }
+        else -> Unit
       }
     }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -148,6 +176,14 @@ fun SyllabusApp(
   LaunchedEffect(viewModel) {
     viewModel.snackbarMessages.collect { message ->
       snackbarHostState.showSnackbar(message)
+    }
+  }
+
+  LaunchedEffect(timerViewModel) {
+    timerViewModel.events.collect { event ->
+      when (event) {
+        is TimerUiEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
+      }
     }
   }
 
@@ -164,7 +200,11 @@ fun SyllabusApp(
     }
   }
 
-  val isBookDetail = currentDestination?.hasRoute<BookDetailRoute>() == true
+  val isSecondaryTimerOrDetailScreen =
+    currentDestination?.hasRoute<BookDetailRoute>() == true ||
+      currentDestination?.hasRoute<StudyTimerSetupRoute>() == true ||
+      currentDestination?.hasRoute<StudyingRoute>() == true ||
+      currentDestination?.hasRoute<ReadingHistoryRoute>() == true
 
   val selectedTab =
     when {
@@ -214,12 +254,26 @@ fun SyllabusApp(
     onConsumeWidgetNav()
   }
 
+  LaunchedEffect(pendingTimerAction?.first) {
+    val (_, timerAction) = pendingTimerAction ?: return@LaunchedEffect
+    when (timerAction) {
+      NotificationHelper.TIMER_ACTION_OPEN_STUDYING -> {
+        navController.navigate(StudyingRoute) { launchSingleTop = true }
+      }
+      NotificationHelper.TIMER_ACTION_STOP_SUMMARY -> {
+        timerViewModel.requestStopSummary()
+        navController.navigate(StudyingRoute) { launchSingleTop = true }
+      }
+    }
+    onConsumeTimerAction()
+  }
+
   Scaffold(
     modifier = Modifier.fillMaxSize(),
     containerColor = AppBackground,
     snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
     bottomBar = {
-      if (!isBookDetail) {
+      if (!isSecondaryTimerOrDetailScreen) {
         SyllabusBottomBar(
           selectedTab = selectedTab,
           onSelectTab = { tab ->
@@ -246,8 +300,16 @@ fun SyllabusApp(
       composable<HomeRoute> {
         HomeScreen(
           snapshot = uiState.snapshot,
+          liveStudying = timerUiState.liveStudying,
           innerPadding = innerPadding,
           onBellClick = { navigateToTab(MoreRoute) },
+          onStudyTimerClick = {
+            if (timerUiState.liveStudying.isRunningOrPaused) {
+              navController.navigate(StudyingRoute) { launchSingleTop = true }
+            } else {
+              navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
+            }
+          },
           onTodaysPlanClick = { viewModel.openDailyGoalDialog() },
           onContinueBookClick = { bookId ->
             navController.navigate(BookDetailRoute(bookId))
@@ -259,6 +321,8 @@ fun SyllabusApp(
       composable<BooksRoute> {
         BooksScreen(
           uiState = uiState,
+          todayStudyMs = timerUiState.analytics.todayTotalMs,
+          liveStudying = timerUiState.liveStudying,
           innerPadding = innerPadding,
           onToggleSearch = { viewModel.toggleSearchActive() },
           onSearchQueryChange = { viewModel.setSearchQuery(it) },
@@ -266,6 +330,13 @@ fun SyllabusApp(
           onSelectSortOrder = { viewModel.setBookSortOrder(it) },
           onBookClick = { bookId -> navController.navigate(BookDetailRoute(bookId)) },
           onAddBookClick = { viewModel.openAddBookDialog() },
+          onStudyTimerClick = {
+            if (timerUiState.liveStudying.isRunningOrPaused) {
+              navController.navigate(StudyingRoute) { launchSingleTop = true }
+            } else {
+              navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
+            }
+          },
         )
       }
 
@@ -295,10 +366,15 @@ fun SyllabusApp(
       composable<ProgressRoute> {
         ProgressScreen(
           uiState = uiState,
+          timerAnalytics = timerUiState.analytics,
           innerPadding = innerPadding,
           onSelectTab = { viewModel.setProgressTab(it) },
           onSelectTrendPeriod = { viewModel.setTrendPeriod(it) },
+          onSelectAnalyticsPeriod = { timerViewModel.setAnalyticsPeriod(it) },
           onBookClick = { bookId -> navController.navigate(BookDetailRoute(bookId)) },
+          onOpenReadingHistory = {
+            navController.navigate(ReadingHistoryRoute) { launchSingleTop = true }
+          },
         )
       }
 
@@ -306,6 +382,17 @@ fun SyllabusApp(
         MoreScreen(
           preferences = uiState.snapshot.preferences,
           innerPadding = innerPadding,
+          isTimerRunning = timerUiState.liveStudying.isRunningOrPaused,
+          onOpenStudyTimer = {
+            if (timerUiState.liveStudying.isRunningOrPaused) {
+              navController.navigate(StudyingRoute) { launchSingleTop = true }
+            } else {
+              navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
+            }
+          },
+          onOpenReadingHistory = {
+            navController.navigate(ReadingHistoryRoute) { launchSingleTop = true }
+          },
           onEditDailyGoal = { viewModel.openDailyGoalDialog() },
           onToggleReminder = { viewModel.setReminderEnabled(it) },
           onEditReminderTime = { viewModel.openTimePicker() },
@@ -313,7 +400,95 @@ fun SyllabusApp(
           onImportBackupUri = { uri -> viewModel.inspectBackupUri(uri) },
         )
       }
+
+      composable<StudyTimerSetupRoute> {
+        StudyTimerSetupScreen(
+          uiState = timerUiState,
+          innerPadding = innerPadding,
+          onBackClick = { navController.popBackStack() },
+          onSelectBook = { timerViewModel.selectBookForTimer(it) },
+          onSelectChapter = { timerViewModel.selectChapterForTimer(it) },
+          onSelectMode = { timerViewModel.selectTimerMode(it) },
+          onSelectPomodoroPreset = { focus, brk ->
+            timerViewModel.setPomodoroPreset(focus, brk)
+          },
+          onSetGoalMinutes = { timerViewModel.setGoalMinutes(it) },
+          onNotesChange = { timerViewModel.setSetupNotes(it) },
+          onStartTimerClick = {
+            timerViewModel.startTimerSession {
+              navController.navigate(StudyingRoute) {
+                popUpTo<StudyTimerSetupRoute> { inclusive = true }
+                launchSingleTop = true
+              }
+            }
+          },
+          onOpenActiveTimer = {
+            navController.navigate(StudyingRoute) { launchSingleTop = true }
+          },
+          onAddBookClick = { viewModel.openAddBookDialog() },
+          onAddChapterClick = { bookId -> viewModel.openAddChapterSheet(preselectedBookId = bookId) },
+        )
+      }
+
+      composable<StudyingRoute> {
+        StudyingScreen(
+          liveState = timerUiState.liveStudying,
+          innerPadding = innerPadding,
+          onMinimizeBack = { navController.popBackStack() },
+          onTogglePauseResume = { timerViewModel.togglePauseResume() },
+          onRequestStop = { timerViewModel.requestStopSummary() },
+          onRecordLap = { timerViewModel.recordLap() },
+          onSkipBreak = { timerViewModel.skipBreak() },
+          onSaveSession = { finalNotes ->
+            timerViewModel.saveSession(finalNotes) {
+              navController.popBackStack()
+            }
+          },
+          onResumeFromSummary = { timerViewModel.resumeFromStopSummary() },
+          onDiscardSession = {
+            timerViewModel.discardSession {
+              navController.popBackStack()
+            }
+          },
+          onOpenHistory = {
+            navController.navigate(ReadingHistoryRoute) { launchSingleTop = true }
+          },
+        )
+      }
+
+      composable<ReadingHistoryRoute> {
+        ReadingHistoryScreen(
+          uiState = timerUiState,
+          innerPadding = innerPadding,
+          observeEvents = { sid -> timerViewModel.observeSessionEvents(sid) },
+          onBackClick = { navController.popBackStack() },
+          onToggleSearch = { timerViewModel.toggleHistorySearch() },
+          onSearchQueryChange = { timerViewModel.setHistorySearchQuery(it) },
+          onSelectBookFilter = { timerViewModel.setHistoryBookFilter(it) },
+          onSelectChapterFilter = { timerViewModel.setHistoryChapterFilter(it) },
+          onSelectDateFilter = { timerViewModel.setHistoryDateFilter(it) },
+          onSelectSortOrder = { timerViewModel.setHistorySortOrder(it) },
+          onUpdateNotes = { id, notes -> timerViewModel.updateHistorySessionNotes(id, notes) },
+          onDeleteSession = { id -> timerViewModel.deleteHistorySession(id) },
+          onStartNewSession = {
+            navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
+          },
+        )
+      }
     }
+  }
+
+  timerUiState.recoveryPrompt?.let { recovery ->
+    TimerRecoveryDialog(
+      data = recovery,
+      onResume = {
+        timerViewModel.resumeRecoveredSession {
+          navController.navigate(StudyingRoute) { launchSingleTop = true }
+        }
+      },
+      onSaveUpToLastKnown = { timerViewModel.saveRecoveredSessionUpToLastKnownTime() },
+      onDiscard = { timerViewModel.discardRecoveredSession() },
+    )
   }
 
   if (uiState.addChapterSheet.isOpen) {
@@ -351,7 +526,7 @@ fun SyllabusApp(
     onConfirm = {
       viewModel.confirmDelete(
         onBookDeleted = {
-          if (isBookDetail) {
+          if (currentDestination?.hasRoute<BookDetailRoute>() == true) {
             navController.popBackStack()
           }
         }

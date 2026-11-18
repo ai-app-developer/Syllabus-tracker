@@ -11,3 +11,9 @@ import kotlinx.serialization.Serializable
 @Serializable object ProgressRoute
 
 @Serializable object MoreRoute
+
+@Serializable object StudyTimerSetupRoute
+
+@Serializable object StudyingRoute
+
+@Serializable object ReadingHistoryRoute

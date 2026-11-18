@@ -18,12 +18,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Layers
@@ -43,7 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -53,73 +58,103 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.repository.DailyStudyCount
 import com.example.data.repository.StudyTrendPeriod
+import com.example.timer.AnalyticsPeriod
+import com.example.timer.BookStudySlice
+import com.example.timer.TimerAnalyticsUiState
+import com.example.timer.TimerMath
+import com.example.ui.theme.AmbientShadow
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardSurface
+import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.HairlineBorder
+import com.example.ui.theme.LightGreenTint
 import com.example.ui.theme.LightIndigoTint
+import com.example.ui.theme.LightRedTint
 import com.example.ui.theme.PrimaryIndigo
+import com.example.ui.theme.ProgressTrack
 import com.example.ui.theme.SecondaryIndigoBar
+import com.example.ui.theme.SoftOrangeTint
+import com.example.ui.theme.StreakOrange
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.VibrantGreen
+import com.example.ui.theme.VioletGradientBottom
+import com.example.ui.theme.VioletGradientTop
 import com.example.ui.viewmodel.ProgressTab
 import com.example.ui.viewmodel.SyllabusUiState
 
 @Composable
 fun ProgressScreen(
   uiState: SyllabusUiState,
+  timerAnalytics: TimerAnalyticsUiState,
   innerPadding: PaddingValues,
   onSelectTab: (ProgressTab) -> Unit,
   onSelectTrendPeriod: (StudyTrendPeriod) -> Unit,
+  onSelectAnalyticsPeriod: (AnalyticsPeriod) -> Unit,
   onBookClick: (Long) -> Unit,
+  onOpenReadingHistory: () -> Unit,
 ) {
+  val bottomPad = innerPadding.calculateBottomPadding() + 14.dp
+
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground).padding(innerPadding),
+    modifier = Modifier.fillMaxSize().background(AppBackground),
     contentAlignment = Alignment.TopCenter,
   ) {
     Column(
-      modifier = Modifier.widthIn(max = 600.dp).fillMaxSize().padding(horizontal = 20.dp),
+      modifier =
+        Modifier.widthIn(max = 600.dp)
+          .fillMaxSize()
+          .padding(
+            top = innerPadding.calculateTopPadding(),
+            start = 20.dp,
+            end = 20.dp,
+          ),
     ) {
-      Spacer(modifier = Modifier.height(16.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
       Text(
         text = stringResource(R.string.progress_title),
-        style = MaterialTheme.typography.headlineLarge,
+        fontSize = 30.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = (-0.5).sp,
         color = TextPrimary,
       )
 
       Spacer(modifier = Modifier.height(14.dp))
 
-      Surface(
-        shape = RoundedCornerShape(50),
-        color = CardSurface,
-        border = BorderStroke(1.dp, HairlineBorder),
-        modifier = Modifier.fillMaxWidth().height(46.dp),
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        Row(
-          modifier = Modifier.fillMaxSize().padding(4.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          SegmentedTabButton(
-            label = stringResource(R.string.tab_overall),
-            selected = uiState.progressTab == ProgressTab.OVERALL,
-            testTag = "tab_overall",
-            onClick = { onSelectTab(ProgressTab.OVERALL) },
-            modifier = Modifier.weight(1f),
-          )
-          SegmentedTabButton(
-            label = stringResource(R.string.tab_by_book),
-            selected = uiState.progressTab == ProgressTab.BY_BOOK,
-            testTag = "tab_by_book",
-            onClick = { onSelectTab(ProgressTab.BY_BOOK) },
-            modifier = Modifier.weight(1f),
-          )
-        }
+        ProgressTabPill(
+          label = stringResource(R.string.tab_overall),
+          selected = uiState.progressTab == ProgressTab.OVERALL,
+          testTag = "tab_overall",
+          onClick = { onSelectTab(ProgressTab.OVERALL) },
+          modifier = Modifier.weight(1f),
+        )
+        ProgressTabPill(
+          label = stringResource(R.string.tab_by_book),
+          selected = uiState.progressTab == ProgressTab.BY_BOOK,
+          testTag = "tab_by_book",
+          onClick = { onSelectTab(ProgressTab.BY_BOOK) },
+          modifier = Modifier.weight(1f),
+        )
+        ProgressTabPill(
+          label = stringResource(R.string.tab_timer),
+          selected = uiState.progressTab == ProgressTab.TIMER,
+          testTag = "tab_timer",
+          onClick = { onSelectTab(ProgressTab.TIMER) },
+          modifier = Modifier.weight(1f),
+        )
       }
 
       Spacer(modifier = Modifier.height(16.dp))
@@ -127,14 +162,25 @@ fun ProgressScreen(
       when (uiState.progressTab) {
         ProgressTab.OVERALL -> {
           Column(
-            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            modifier =
+              Modifier.weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = bottomPad),
           ) {
+            val cardShape = RoundedCornerShape(22.dp)
             Surface(
-              shape = RoundedCornerShape(16.dp),
+              shape = cardShape,
               color = CardSurface,
               border = BorderStroke(1.dp, HairlineBorder),
-              shadowElevation = 1.dp,
-              modifier = Modifier.fillMaxWidth(),
+              modifier =
+                Modifier.fillMaxWidth()
+                  .shadow(
+                    elevation = 10.dp,
+                    shape = cardShape,
+                    clip = false,
+                    ambientColor = AmbientShadow,
+                    spotColor = AmbientShadow,
+                  ),
             ) {
               Column {
                 Column(modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp)) {
@@ -167,7 +213,7 @@ fun ProgressScreen(
                 ) {
                   ProgressStatColumn(
                     icon = Icons.Outlined.CheckCircle,
-                    iconTint = SuccessGreen,
+                    iconTint = VibrantGreen,
                     value = uiState.snapshot.completedChapters.toString(),
                     label = stringResource(R.string.completed_label),
                     modifier = Modifier.weight(1f),
@@ -207,15 +253,13 @@ fun ProgressScreen(
               period = uiState.trendPeriod,
               onSelectPeriod = onSelectTrendPeriod,
             )
-
-            Spacer(modifier = Modifier.height(16.dp))
           }
         }
 
         ProgressTab.BY_BOOK -> {
           if (uiState.snapshot.books.isEmpty()) {
             Box(
-              modifier = Modifier.weight(1f).fillMaxWidth(),
+              modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = bottomPad),
               contentAlignment = Alignment.Center,
             ) {
               Text(
@@ -228,12 +272,421 @@ fun ProgressScreen(
             LazyColumn(
               modifier = Modifier.weight(1f).fillMaxWidth(),
               verticalArrangement = Arrangement.spacedBy(12.dp),
-              contentPadding = PaddingValues(bottom = 16.dp),
+              contentPadding = PaddingValues(bottom = bottomPad),
             ) {
-              items(uiState.snapshot.books, key = { it.book.id }) { summary ->
+              itemsIndexed(uiState.snapshot.books, key = { _, it -> it.book.id }) { index, summary ->
                 BookProgressCard(
                   summary = summary,
+                  colorSlot = index,
                   onClick = { onBookClick(summary.book.id) },
+                )
+              }
+            }
+          }
+        }
+
+        ProgressTab.TIMER -> {
+          Column(
+            modifier =
+              Modifier.weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = bottomPad),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+          ) {
+            TimerStudyTimeCard(
+              analytics = timerAnalytics,
+              onSelectPeriod = onSelectAnalyticsPeriod,
+            )
+
+            BookWiseStudyTimeCard(
+              totalPeriodMs = timerAnalytics.periodTotalMs,
+              slices = timerAnalytics.bookSlices,
+            )
+
+            StudyStreakCard(
+              streakDays = timerAnalytics.currentStreakDays,
+              onClick = onOpenReadingHistory,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun ProgressTabPill(
+  label: String,
+  selected: Boolean,
+  testTag: String,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val pillShape = RoundedCornerShape(50)
+  Surface(
+    shape = pillShape,
+    color = if (selected) PrimaryIndigo else CardSurface,
+    border = if (selected) null else BorderStroke(1.dp, HairlineBorder),
+    modifier =
+      modifier
+        .height(40.dp)
+        .shadow(
+          elevation = if (selected) 6.dp else 3.dp,
+          shape = pillShape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        )
+        .clip(pillShape)
+        .clickable(onClick = onClick)
+        .testTag(testTag),
+  ) {
+    Box(
+      modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(
+        text = label,
+        color = if (selected) Color.White else TextPrimary,
+        fontSize = 14.sp,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+        maxLines = 1,
+      )
+    }
+  }
+}
+
+@Composable
+private fun TimerStudyTimeCard(
+  analytics: TimerAnalyticsUiState,
+  onSelectPeriod: (AnalyticsPeriod) -> Unit,
+) {
+  var periodMenuExpanded by remember { mutableStateOf(false) }
+  val cardShape = RoundedCornerShape(22.dp)
+  val maxMs = (analytics.bars.maxOfOrNull { it.durationMs } ?: 0L).coerceAtLeast(1L)
+
+  Surface(
+    shape = cardShape,
+    color = CardSurface,
+    border = BorderStroke(1.dp, HairlineBorder),
+    modifier =
+      Modifier.fillMaxWidth()
+        .shadow(
+          elevation = 10.dp,
+          shape = cardShape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        ),
+  ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "Study Time",
+          fontSize = 16.sp,
+          fontWeight = FontWeight.Bold,
+          color = TextPrimary,
+        )
+
+        Box {
+          Surface(
+            onClick = { periodMenuExpanded = true },
+            shape = RoundedCornerShape(50),
+            color = AppBackground,
+            border = BorderStroke(1.dp, HairlineBorder),
+            modifier = Modifier.testTag("timer_period_dropdown"),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = analytics.period.label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = TextPrimary,
+              )
+              Spacer(modifier = Modifier.width(4.dp))
+              Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                contentDescription = "Select period",
+                tint = TextSecondary,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          }
+
+          DropdownMenu(
+            expanded = periodMenuExpanded,
+            onDismissRequest = { periodMenuExpanded = false },
+            containerColor = CardSurface,
+          ) {
+            AnalyticsPeriod.entries.forEach { period ->
+              DropdownMenuItem(
+                text = {
+                  Text(
+                    text = period.label,
+                    color = if (analytics.period == period) PrimaryIndigo else TextPrimary,
+                    fontWeight =
+                      if (analytics.period == period) FontWeight.SemiBold else FontWeight.Normal,
+                  )
+                },
+                onClick = {
+                  periodMenuExpanded = false
+                  onSelectPeriod(period)
+                },
+              )
+            }
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(6.dp))
+
+      Text(
+        text = TimerMath.formatHoursMinutes(analytics.periodTotalMs),
+        fontSize = 32.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = (-0.8).sp,
+        color = TextPrimary,
+        modifier = Modifier.testTag("timer_period_total_text"),
+      )
+
+      Spacer(modifier = Modifier.height(6.dp))
+
+      val delta = analytics.deltaPercent
+      if (delta != null) {
+        val isPositive = delta >= 0
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = if (isPositive) LightGreenTint else LightRedTint,
+          ) {
+            Text(
+              text = if (isPositive) "↑ +$delta%" else "↓ $delta%",
+              fontSize = 12.sp,
+              fontWeight = FontWeight.SemiBold,
+              color = if (isPositive) SuccessGreen else ErrorRed,
+              modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            )
+          }
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = analytics.period.comparisonLabel,
+            fontSize = 13.sp,
+            color = TextSecondary,
+          )
+        }
+      } else {
+        Text(
+          text =
+            if (analytics.periodTotalMs == 0L) {
+              "No study time yet — start a session to track your progress"
+            } else {
+              "First tracked ${analytics.period.label.lowercase()}"
+            },
+          fontSize = 13.sp,
+          color = TextSecondary,
+        )
+      }
+
+      Spacer(modifier = Modifier.height(20.dp))
+
+      Row(
+        modifier = Modifier.fillMaxWidth().height(124.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom,
+      ) {
+        analytics.bars.forEach { bucket ->
+          val hasData = bucket.durationMs > 0L
+          val barHeight =
+            if (!hasData) {
+              10.dp
+            } else {
+              ((bucket.durationMs.toFloat() / maxMs.toFloat()) * 76f).dp.coerceAtLeast(18.dp)
+            }
+          val barShape = RoundedCornerShape(topStart = 9.dp, topEnd = 9.dp, bottomStart = 5.dp, bottomEnd = 5.dp)
+
+          Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Bottom,
+          ) {
+            Box(
+              modifier =
+                Modifier.width(28.dp)
+                  .height(barHeight)
+                  .clip(barShape)
+                  .background(
+                    when {
+                      !hasData -> Brush.verticalGradient(listOf(ProgressTrack, ProgressTrack))
+                      bucket.isHighest ->
+                        Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
+                      else ->
+                        Brush.verticalGradient(listOf(Color(0xFFCBC3FE), Color(0xFFD9D3FE)))
+                    }
+                  ),
+            )
+            Spacer(modifier = Modifier.height(7.dp))
+            Text(
+              text = bucket.label,
+              fontSize = 11.sp,
+              color = TextSecondary,
+              maxLines = 1,
+            )
+            Text(
+              text = bucket.valueLabel,
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Bold,
+              color = TextPrimary,
+              maxLines = 1,
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun BookWiseStudyTimeCard(
+  totalPeriodMs: Long,
+  slices: List<BookStudySlice>,
+) {
+  val cardShape = RoundedCornerShape(22.dp)
+  Surface(
+    shape = cardShape,
+    color = CardSurface,
+    border = BorderStroke(1.dp, HairlineBorder),
+    modifier =
+      Modifier.fillMaxWidth()
+        .shadow(
+          elevation = 10.dp,
+          shape = cardShape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        ),
+  ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
+      Text(
+        text = "Book-wise Study Time",
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold,
+        color = TextPrimary,
+      )
+
+      Spacer(modifier = Modifier.height(16.dp))
+
+      if (slices.isEmpty() || totalPeriodMs <= 0L) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Box(
+            modifier = Modifier.size(116.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Canvas(modifier = Modifier.fillMaxSize().padding(10.dp)) {
+              drawArc(
+                color = ProgressTrack,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                style = Stroke(width = 18.dp.toPx(), cap = StrokeCap.Butt),
+              )
+            }
+            Text(
+              text = "No study\ntime yet",
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Medium,
+              color = TextSecondary,
+              textAlign = TextAlign.Center,
+              lineHeight = 15.sp,
+            )
+          }
+          Spacer(modifier = Modifier.width(16.dp))
+          Text(
+            text = "Complete a study timer session to see your reading time split across books.",
+            fontSize = 13.sp,
+            color = TextSecondary,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      } else {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Box(
+            modifier = Modifier.size(122.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Canvas(modifier = Modifier.fillMaxSize().padding(10.dp)) {
+              val strokeWidth = 19.dp.toPx()
+              val gapDeg = if (slices.size > 1) 4f else 0f
+              val totalSweepAvail = 360f - (gapDeg * slices.size)
+              var startAngle = -90f
+              val sumMs = slices.sumOf { it.totalMs }.coerceAtLeast(1L).toFloat()
+
+              slices.forEach { slice ->
+                val sweep = (slice.totalMs.toFloat() / sumMs) * totalSweepAvail
+                drawArc(
+                  color = Color(slice.colorHex),
+                  startAngle = startAngle,
+                  sweepAngle = sweep.coerceAtLeast(1f),
+                  useCenter = false,
+                  style = Stroke(width = strokeWidth, cap = StrokeCap.Butt),
+                )
+                startAngle += sweep + gapDeg
+              }
+            }
+            Text(
+              text = TimerMath.formatStackedHoursMinutes(totalPeriodMs),
+              fontSize = 16.sp,
+              fontWeight = FontWeight.Bold,
+              color = TextPrimary,
+              textAlign = TextAlign.Center,
+              lineHeight = 19.sp,
+            )
+          }
+
+          Spacer(modifier = Modifier.width(16.dp))
+
+          Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            slices.forEach { slice ->
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Box(
+                  modifier =
+                    Modifier.size(9.dp)
+                      .clip(CircleShape)
+                      .background(Color(slice.colorHex)),
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                  text = slice.bookName,
+                  fontSize = 13.sp,
+                  color = TextSecondary,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  modifier = Modifier.weight(1f),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                  text = TimerMath.formatHoursMinutes(slice.totalMs),
+                  fontSize = 13.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = TextPrimary,
                 )
               }
             }
@@ -245,29 +698,70 @@ fun ProgressScreen(
 }
 
 @Composable
-private fun SegmentedTabButton(
-  label: String,
-  selected: Boolean,
-  testTag: String,
+private fun StudyStreakCard(
+  streakDays: Int,
   onClick: () -> Unit,
-  modifier: Modifier = Modifier,
 ) {
-  Box(
+  val cardShape = RoundedCornerShape(22.dp)
+  Surface(
+    onClick = onClick,
+    shape = cardShape,
+    color = CardSurface,
+    border = BorderStroke(1.dp, HairlineBorder),
     modifier =
-      modifier
-        .height(38.dp)
-        .clip(RoundedCornerShape(50))
-        .background(if (selected) PrimaryIndigo else Color.Transparent)
-        .clickable(onClick = onClick)
-        .testTag(testTag),
-    contentAlignment = Alignment.Center,
+      Modifier.fillMaxWidth()
+        .shadow(
+          elevation = 10.dp,
+          shape = cardShape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        )
+        .testTag("progress_streak_card"),
   ) {
-    Text(
-      text = label,
-      color = if (selected) Color.White else TextSecondary,
-      fontSize = 14.sp,
-      fontWeight = FontWeight.SemiBold,
-    )
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Box(
+        modifier =
+          Modifier.size(52.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(SoftOrangeTint),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Filled.LocalFireDepartment,
+          contentDescription = null,
+          tint = StreakOrange,
+          modifier = Modifier.size(30.dp),
+        )
+      }
+      Spacer(modifier = Modifier.width(14.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "Study Streak",
+          fontSize = 13.sp,
+          color = TextSecondary,
+        )
+        Text(
+          text = "$streakDays ${if (streakDays == 1) "Day" else "Days"}",
+          fontSize = 20.sp,
+          fontWeight = FontWeight.Bold,
+          color = TextPrimary,
+        )
+        Text(
+          text = if (streakDays > 0) "Keep it up!" else "No study time yet — start today!",
+          fontSize = 13.sp,
+          color = TextSecondary,
+        )
+      }
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = "Open reading history",
+        tint = TextSecondary,
+      )
+    }
   }
 }
 
@@ -362,13 +856,21 @@ private fun StudyTrendCard(
 ) {
   var periodMenuExpanded by remember { mutableStateOf(false) }
   val maxCount = (trend.maxOfOrNull { it.count } ?: 0).coerceAtLeast(1)
+  val cardShape = RoundedCornerShape(22.dp)
 
   Surface(
-    shape = RoundedCornerShape(16.dp),
+    shape = cardShape,
     color = CardSurface,
     border = BorderStroke(1.dp, HairlineBorder),
-    shadowElevation = 1.dp,
-    modifier = Modifier.fillMaxWidth(),
+    modifier =
+      Modifier.fillMaxWidth()
+        .shadow(
+          elevation = 10.dp,
+          shape = cardShape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        ),
   ) {
     Column(modifier = Modifier.padding(18.dp)) {
       Row(
@@ -385,7 +887,7 @@ private fun StudyTrendCard(
         Box {
           Surface(
             onClick = { periodMenuExpanded = true },
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(50),
             color = AppBackground,
             border = BorderStroke(1.dp, HairlineBorder),
             modifier = Modifier.testTag("trend_period_dropdown"),
@@ -448,7 +950,7 @@ private fun StudyTrendCard(
         trend.forEach { day ->
           val barColor =
             when {
-              day.count == 0 -> LightIndigoTint
+              day.count == 0 -> ProgressTrack
               day.isToday -> PrimaryIndigo
               else -> SecondaryIndigoBar
             }
@@ -472,9 +974,9 @@ private fun StudyTrendCard(
             }
             Box(
               modifier =
-                Modifier.width(24.dp)
+                Modifier.width(26.dp)
                   .height(barHeight)
-                  .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                  .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 4.dp, bottomEnd = 4.dp))
                   .background(barColor),
             )
             Spacer(modifier = Modifier.height(8.dp))

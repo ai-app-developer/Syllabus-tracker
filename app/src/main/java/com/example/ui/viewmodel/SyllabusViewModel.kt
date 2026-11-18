@@ -48,6 +48,7 @@ enum class BookSortOrder {
 enum class ProgressTab {
   OVERALL,
   BY_BOOK,
+  TIMER,
 }
 
 data class AddChapterSheetState(
