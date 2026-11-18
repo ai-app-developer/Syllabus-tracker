@@ -453,6 +453,10 @@ class SyllabusRepository(
     prefsRepo.setTimerVibrationEnabled(enabled)
   }
 
+  suspend fun setTimerPermissionChecklistShown(shown: Boolean) {
+    prefsRepo.setTimerPermissionChecklistShown(shown)
+  }
+
   suspend fun getCompletedTodayCount(): Int {
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)

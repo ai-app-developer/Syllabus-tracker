@@ -407,6 +407,8 @@ fun SyllabusApp(
         StudyTimerSetupScreen(
           uiState = timerUiState,
           innerPadding = innerPadding,
+          timerPermissionChecklistShown = uiState.snapshot.preferences.timerPermissionChecklistShown,
+          onPermissionChecklistShown = { viewModel.setTimerPermissionChecklistShown(true) },
           onBackClick = { navController.popBackStack() },
           onSelectBook = { timerViewModel.selectBookForTimer(it) },
           onSelectChapter = { timerViewModel.selectChapterForTimer(it) },

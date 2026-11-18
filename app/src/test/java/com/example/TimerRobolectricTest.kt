@@ -17,6 +17,8 @@ import com.example.data.local.entity.ChapterEntity
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.SyllabusRepository
 import com.example.data.repository.TimerRepository
+import com.example.notifications.NotificationHelper
+import com.example.timer.AlarmFireSource
 import com.example.timer.ClockProvider
 import com.example.timer.PrefsAlarmDeduplicator
 import com.example.timer.ScheduledAlarmTarget
@@ -43,6 +45,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlarmManager
+import org.robolectric.shadows.ShadowLog
 
 private class FakeClock(
   var elapsedMs: Long = 10_000L,
@@ -237,7 +240,7 @@ class TimerRobolectricTest {
     }
 
   @Test
-  fun `pomodoro transitions via handleAlarmEvent chains next phase and skipBreak suppresses break end`() =
+  fun `pomodoro transitions via fireEvent chain next phase and skipBreak suppresses break end`() =
     runTest {
       val bookId = db.syllabusDao().insertBook(BookEntity(name = "Biology"))
       val chapterId =
@@ -280,14 +283,15 @@ class TimerRobolectricTest {
       assertEquals(focusTriggerWall, startTargets[0].triggerWallMs)
       val sessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
 
-      // Focus ends -> enters BREAK, returns outcome once, and immediately chains BREAK_END
+      // Focus ends via PRIMARY -> enters BREAK, returns outcome once, and immediately chains BREAK_END
       clock.advance(25 * 60_000L)
       val focusOutcome =
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
           eventType = TimerAlarmEventType.FOCUS_END,
           sessionId = sessionId,
-          expectedCycle = 1,
-          expectedTriggerWallMs = focusTriggerWall,
+          phaseIndex = 1,
+          expectedEventWallMs = focusTriggerWall,
         )
       assertNotNull(focusOutcome)
       assertEquals("Break started", focusOutcome!!.title)
@@ -295,35 +299,47 @@ class TimerRobolectricTest {
       assertEquals(TimerStatus.BREAK, focusOutcome.updatedState.status)
       assertEquals(25 * 60_000L, focusOutcome.updatedState.accumulatedFocusMs)
 
-      // Duplicate broadcast is ignored
+      // Duplicate BACKUP arrival 2000ms later is ignored
+      clock.advance(TimerAlarmScheduler.BACKUP_OFFSET_MS)
       assertNull(
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.BACKUP,
           eventType = TimerAlarmEventType.FOCUS_END,
           sessionId = sessionId,
-          expectedCycle = 1,
-          expectedTriggerWallMs = focusTriggerWall,
+          phaseIndex = 1,
+          expectedEventWallMs = focusTriggerWall,
         )
       )
 
       val breakTargets = syncedTargets.last()
       assertEquals(1, breakTargets.size)
       assertEquals(TimerAlarmEventType.BREAK_END, breakTargets[0].eventType)
-      val breakTriggerWall = clock.wallMs + 5 * 60_000L
-      assertEquals(breakTriggerWall, breakTargets[0].triggerWallMs)
+      val breakTriggerWall = breakTargets[0].triggerWallMs
 
-      // Break ends -> advances to cycle 2 RUNNING and chains cycle 2 FOCUS_END
+      // Break ends via BACKUP -> advances to cycle 2 RUNNING and rejects late PRIMARY duplicate
       clock.advance(5 * 60_000L)
       val breakOutcome =
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.BACKUP,
           eventType = TimerAlarmEventType.BREAK_END,
           sessionId = sessionId,
-          expectedCycle = 1,
-          expectedTriggerWallMs = breakTriggerWall,
+          phaseIndex = 1,
+          expectedEventWallMs = breakTriggerWall,
         )
       assertNotNull(breakOutcome)
       assertEquals("Break over, back to focus", breakOutcome!!.title)
       assertEquals(TimerStatus.RUNNING, breakOutcome.updatedState.status)
       assertEquals(2, breakOutcome.updatedState.pomodoroCycle)
+
+      assertNull(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
+          eventType = TimerAlarmEventType.BREAK_END,
+          sessionId = sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = breakTriggerWall,
+        )
+      )
 
       val cycle2Targets = syncedTargets.last()
       assertEquals(1, cycle2Targets.size)
@@ -333,11 +349,12 @@ class TimerRobolectricTest {
       // Reach cycle 2 break, then skipBreak -> skips to cycle 3 and rejects stale cycle-2 BREAK_END
       clock.advance(25 * 60_000L)
       assertNotNull(
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
           eventType = TimerAlarmEventType.FOCUS_END,
           sessionId = sessionId,
-          expectedCycle = 2,
-          expectedTriggerWallMs = cycle2TriggerWall,
+          phaseIndex = 2,
+          expectedEventWallMs = cycle2TriggerWall,
         )
       )
       alarmRepo.skipBreak()
@@ -348,11 +365,12 @@ class TimerRobolectricTest {
 
       clock.advance(5 * 60_000L)
       assertNull(
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.BACKUP,
           eventType = TimerAlarmEventType.BREAK_END,
           sessionId = sessionId,
-          expectedCycle = 2,
-          expectedTriggerWallMs = clock.wallMs,
+          phaseIndex = 2,
+          expectedEventWallMs = clock.wallMs,
         )
       )
     }
@@ -402,11 +420,12 @@ class TimerRobolectricTest {
       val sessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
       clock.advance(25 * 60_000L)
       assertNotNull(
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
           eventType = TimerAlarmEventType.FOCUS_END,
           sessionId = sessionId,
-          expectedCycle = 1,
-          expectedTriggerWallMs = clock.wallMs,
+          phaseIndex = 1,
+          expectedEventWallMs = clock.wallMs,
         )
       )
       // During BREAK, only BREAK_END is scheduled (goal paused during break)
@@ -414,11 +433,12 @@ class TimerRobolectricTest {
 
       clock.advance(5 * 60_000L)
       assertNotNull(
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
           eventType = TimerAlarmEventType.BREAK_END,
           sessionId = sessionId,
-          expectedCycle = 1,
-          expectedTriggerWallMs = clock.wallMs,
+          phaseIndex = 1,
+          expectedEventWallMs = clock.wallMs,
         )
       )
       // Cycle 2 RUNNING: 25m already accumulated toward 40m goal -> GOAL_REACHED at +15m
@@ -437,11 +457,12 @@ class TimerRobolectricTest {
       // Fire GOAL_REACHED at +35m
       clock.advance(35 * 60_000L)
       val goalOutcome =
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
           eventType = TimerAlarmEventType.GOAL_REACHED,
           sessionId = sessionId,
-          expectedCycle = 2,
-          expectedTriggerWallMs = clock.wallMs,
+          phaseIndex = 2,
+          expectedEventWallMs = clock.wallMs,
         )
       assertNotNull(goalOutcome)
       assertEquals("Goal completed", goalOutcome!!.title)
@@ -500,11 +521,12 @@ class TimerRobolectricTest {
       // Firing while paused returns null
       clock.advance(20 * 60_000L)
       assertNull(
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.BACKUP,
           eventType = TimerAlarmEventType.GOAL_REACHED,
           sessionId = sessionId,
-          expectedCycle = 1,
-          expectedTriggerWallMs = clock.wallMs - 14 * 60_000L,
+          phaseIndex = 1,
+          expectedEventWallMs = clock.wallMs - 14 * 60_000L,
         )
       )
 
@@ -513,14 +535,15 @@ class TimerRobolectricTest {
       val resumedTriggerWall = clock.wallMs + 6 * 60_000L
       assertEquals(resumedTriggerWall, syncedTargets.last().single().triggerWallMs)
 
-      // Fire 18s late -> receiver uses outcome.delayMs > 15_000L to skip sound/vibration
+      // Fire 18s late -> player uses outcome.delayMs > 15_000L to skip sound/vibration
       clock.advance(6 * 60_000L + 18_000L)
       val lateOutcome =
-        alarmRepo.handleAlarmEvent(
+        alarmRepo.fireEvent(
+          source = AlarmFireSource.BACKUP,
           eventType = TimerAlarmEventType.GOAL_REACHED,
           sessionId = sessionId,
-          expectedCycle = 1,
-          expectedTriggerWallMs = resumedTriggerWall,
+          phaseIndex = 1,
+          expectedEventWallMs = resumedTriggerWall,
         )
       assertNotNull(lateOutcome)
       assertEquals(18_000L, lateOutcome!!.delayMs)
@@ -528,7 +551,7 @@ class TimerRobolectricTest {
     }
 
   @Test
-  fun `alarm scheduler uses AlarmManager setAlarmClock when allowed and cancels cleanly`() {
+  fun `alarm scheduler schedules AlarmManager setAlarmClock backup at eventTime plus 2000ms and cancels cleanly`() {
     val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     val shadowAlarmManager = Shadows.shadowOf(alarmManager)
     ShadowAlarmManager.setCanScheduleExactAlarms(true)
@@ -568,6 +591,23 @@ class TimerRobolectricTest {
       }
     assertEquals(2, scheduledTimerAlarms.size)
     assertNotNull(alarmManager.nextAlarmClock)
+
+    val focusAlarm =
+      scheduledTimerAlarms.first {
+        Shadows.shadowOf(it.operation).savedIntent.action == TimerAlarmEventType.FOCUS_END.action
+      }
+    val expectedFocusExactWall = clock.wallMs + 25 * 60_000L
+    assertEquals(
+      expectedFocusExactWall + TimerAlarmScheduler.BACKUP_OFFSET_MS,
+      focusAlarm.triggerAtTime,
+    )
+    assertEquals(
+      expectedFocusExactWall,
+      Shadows.shadowOf(focusAlarm.operation).savedIntent.getLongExtra(
+        TimerAlarmScheduler.EXTRA_TRIGGER_WALL_MS,
+        -1L,
+      ),
+    )
 
     TimerAlarmScheduler.cancelAllAlarms(context)
     val remainingTimerAlarms =
@@ -816,6 +856,94 @@ class TimerRobolectricTest {
         syllabusRepo.importBackup((legacyValid as BackupValidationResult.Valid).backup, BackupImportMode.REPLACE)
       assertTrue(restoredPrefs.timerAlarmEnabled)
       assertTrue(restoredPrefs.timerVibrationEnabled)
+    }
+
+  @Test
+  fun `primary vs backup duplicate prevention logs skipped duplicate and launch check restores future wall alarms`() =
+    runTest {
+      ShadowLog.clear()
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Physics"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Waves", number = 1))
+
+      var wallSyncCount = 0
+      var normalCancelCount = 0
+      val dedup = PrefsAlarmDeduplicator(context)
+      val sharedRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          alarmDeduplicator = dedup,
+          onSyncAlarm = { state -> if (state == null) normalCancelCount++ },
+          onSyncWallAlarms = { wallSyncCount++ },
+        )
+
+      assertTrue(
+        sharedRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      val sessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
+      val focusWall = clock.wallMs + 25 * 60_000L
+
+      // Primary fires at exact time
+      clock.advance(25 * 60_000L)
+      assertNotNull(
+        sharedRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = focusWall,
+        )
+      )
+
+      // Backup fires 2000ms later -> returns null and logs "skipped duplicate" under TimerAlarm
+      clock.advance(TimerAlarmScheduler.BACKUP_OFFSET_MS)
+      assertNull(
+        sharedRepo.fireEvent(
+          source = AlarmFireSource.BACKUP,
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = focusWall,
+        )
+      )
+      val timerAlarmLogs = ShadowLog.getLogsForTag("TimerAlarm").map { it.msg }
+      assertTrue(timerAlarmLogs.any { it.contains("skipped duplicate") })
+
+      // Simulate cold process restart while BREAK has future BREAK_END target -> checkUnfinishedSessionOnLaunch restores wall alarm
+      val freshRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          alarmDeduplicator = dedup,
+          onSyncAlarm = { state -> if (state == null) normalCancelCount++ },
+          onSyncWallAlarms = { wallSyncCount++ },
+        )
+      freshRepo.checkUnfinishedSessionOnLaunch()
+      assertEquals(1, wallSyncCount)
+    }
+
+  @Test
+  fun `permission checklist preference persists and timer_alarm channel sound check is true by default`() =
+    runTest {
+      val prefs = UserPreferencesRepository(context)
+      assertFalse(prefs.getCurrentPreferences().timerPermissionChecklistShown)
+      prefs.setTimerPermissionChecklistShown(true)
+      assertTrue(prefs.getCurrentPreferences().timerPermissionChecklistShown)
+
+      assertTrue(NotificationHelper.isTimerAlarmChannelSoundAllowed(context))
     }
 }
 

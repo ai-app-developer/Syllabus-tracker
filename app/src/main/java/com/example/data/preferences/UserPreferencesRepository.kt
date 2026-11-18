@@ -23,6 +23,7 @@ data class UserPreferences(
   val lastOpenedBookId: Long = -1L,
   val timerAlarmEnabled: Boolean = true,
   val timerVibrationEnabled: Boolean = true,
+  val timerPermissionChecklistShown: Boolean = false,
 ) {
   companion object {
     const val DEFAULT_DAILY_GOAL = 2
@@ -40,6 +41,7 @@ class UserPreferencesRepository(private val context: Context) {
     val LAST_OPENED_BOOK_ID = longPreferencesKey("last_opened_book_id")
     val TIMER_ALARM_ENABLED = booleanPreferencesKey("timer_alarm_enabled")
     val TIMER_VIBRATION_ENABLED = booleanPreferencesKey("timer_vibration_enabled")
+    val TIMER_PERMISSION_CHECKLIST_SHOWN = booleanPreferencesKey("timer_permission_checklist_shown")
   }
 
   @Volatile
@@ -58,6 +60,7 @@ class UserPreferencesRepository(private val context: Context) {
           lastOpenedBookId = prefs[Keys.LAST_OPENED_BOOK_ID] ?: -1L,
           timerAlarmEnabled = prefs[Keys.TIMER_ALARM_ENABLED] ?: true,
           timerVibrationEnabled = prefs[Keys.TIMER_VIBRATION_ENABLED] ?: true,
+          timerPermissionChecklistShown = prefs[Keys.TIMER_PERMISSION_CHECKLIST_SHOWN] ?: false,
         )
       }
       .onEach { cachedPrefs = it }
@@ -101,5 +104,10 @@ class UserPreferencesRepository(private val context: Context) {
   suspend fun setTimerVibrationEnabled(enabled: Boolean) {
     cachedPrefs = cachedPrefs?.copy(timerVibrationEnabled = enabled)
     context.dataStore.edit { prefs -> prefs[Keys.TIMER_VIBRATION_ENABLED] = enabled }
+  }
+
+  suspend fun setTimerPermissionChecklistShown(shown: Boolean) {
+    cachedPrefs = cachedPrefs?.copy(timerPermissionChecklistShown = shown)
+    context.dataStore.edit { prefs -> prefs[Keys.TIMER_PERMISSION_CHECKLIST_SHOWN] = shown }
   }
 }

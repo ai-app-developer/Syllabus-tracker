@@ -1,12 +1,5 @@
 package com.example.ui.screens
 
-import android.Manifest
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -70,13 +63,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.notifications.NotificationHelper
-import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
-import com.example.ui.components.ExactAlarmPermissionDialog
 import com.example.ui.components.PomodoroCustomDialog
 import com.example.ui.components.SessionGoalDialog
+import com.example.ui.components.TimerPermissionsChecklistDialog
 import com.example.ui.theme.AmbientShadow
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardSurface
@@ -97,6 +88,8 @@ import com.example.ui.viewmodel.TimerUiState
 fun StudyTimerSetupScreen(
   uiState: TimerUiState,
   innerPadding: PaddingValues,
+  timerPermissionChecklistShown: Boolean,
+  onPermissionChecklistShown: () -> Unit,
   onBackClick: () -> Unit,
   onSelectBook: (Long) -> Unit,
   onSelectChapter: (Long) -> Unit,
@@ -109,33 +102,11 @@ fun StudyTimerSetupScreen(
   onAddBookClick: () -> Unit,
   onAddChapterClick: (Long) -> Unit,
 ) {
-  val context = LocalContext.current
   var showBookMenu by remember { mutableStateOf(false) }
   var showChapterMenu by remember { mutableStateOf(false) }
   var showGoalDialog by remember { mutableStateOf(false) }
   var showCustomPomodoroDialog by remember { mutableStateOf(false) }
-  var showExactAlarmDialog by remember { mutableStateOf(false) }
-
-  val exactAlarmLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-      onStartTimerClick()
-    }
-
-  val proceedWithExactAlarmCheckOrStart = {
-    if (
-      Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-        !TimerAlarmScheduler.canScheduleExactAlarms(context)
-    ) {
-      showExactAlarmDialog = true
-    } else {
-      onStartTimerClick()
-    }
-  }
-
-  val notificationPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-      proceedWithExactAlarmCheckOrStart()
-    }
+  var showPermissionChecklistDialog by remember { mutableStateOf(false) }
 
   val setup = uiState.setup
   val selectedBook = uiState.books.firstOrNull { it.id == setup.selectedBookId }
@@ -636,13 +607,10 @@ fun StudyTimerSetupScreen(
       Surface(
         onClick = {
           if (ctaEnabled) {
-            if (
-              Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                !NotificationHelper.hasNotificationPermission(context)
-            ) {
-              notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            if (!timerPermissionChecklistShown) {
+              showPermissionChecklistDialog = true
             } else {
-              proceedWithExactAlarmCheckOrStart()
+              onStartTimerClick()
             }
           }
         },
@@ -743,23 +711,13 @@ fun StudyTimerSetupScreen(
     )
   }
 
-  if (showExactAlarmDialog) {
-    ExactAlarmPermissionDialog(
-      onAllow = {
-        showExactAlarmDialog = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-          val intent =
-            Intent(
-              Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-              Uri.parse("package:${context.packageName}"),
-            )
-          runCatching { exactAlarmLauncher.launch(intent) }.onFailure { onStartTimerClick() }
-        } else {
-          onStartTimerClick()
-        }
-      },
-      onDecline = {
-        showExactAlarmDialog = false
+  if (showPermissionChecklistDialog) {
+    TimerPermissionsChecklistDialog(
+      isStartFlow = true,
+      onDismiss = { showPermissionChecklistDialog = false },
+      onContinue = {
+        showPermissionChecklistDialog = false
+        onPermissionChecklistShown()
         onStartTimerClick()
       },
     )

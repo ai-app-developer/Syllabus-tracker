@@ -15,9 +15,17 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import com.example.R
+import com.example.SyllabusApplication
+import com.example.data.repository.AlarmOutcome
+import com.example.notifications.NotificationHelper
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+
+enum class AlarmFireSource(val logLabel: String) {
+  PRIMARY("primary"),
+  BACKUP("backup"),
+}
 
 interface TimerAlarmDeduplicator {
   fun tryAcquire(eventKey: String, sessionId: String): Boolean
@@ -189,6 +197,57 @@ object TimerAlarmPlayer {
   }
 
   /**
+   * Single shared alarm firing entry point used by both the primary in-service timer
+   * and the backup TimerAlarmReceiver.
+   */
+  suspend fun fireEvent(
+    context: Context,
+    source: AlarmFireSource,
+    eventType: TimerAlarmEventType,
+    sessionId: String,
+    phaseIndex: Int,
+    expectedEventWallMs: Long,
+  ): AlarmOutcome? {
+    val app = context.applicationContext as? SyllabusApplication ?: return null
+    val outcome =
+      app.timerRepository.fireEvent(
+        source = source,
+        eventType = eventType,
+        sessionId = sessionId,
+        phaseIndex = phaseIndex,
+        expectedEventWallMs = expectedEventWallMs,
+      ) ?: return null
+
+    Log.d(TAG, "fired by ${source.logLabel} ${eventType.name}, delay ${outcome.delayMs} ms")
+
+    val prefs = app.preferencesRepository.getCurrentPreferences()
+    val isTooLate = outcome.delayMs > TimerAlarmScheduler.LATE_THRESHOLD_MS
+
+    val soundStarted =
+      if (!isTooLate && (prefs.timerAlarmEnabled || prefs.timerVibrationEnabled)) {
+        playMiniAlarm(
+          context = app,
+          playSound = prefs.timerAlarmEnabled,
+          playVibration = prefs.timerVibrationEnabled,
+        )
+      } else {
+        false
+      }
+
+    val shouldUseChannelFallbackSound =
+      !isTooLate && prefs.timerAlarmEnabled && !soundStarted
+
+    NotificationHelper.showTimerAlert(
+      context = app,
+      title = outcome.title,
+      message = outcome.message,
+      notificationId = outcome.notificationId,
+      silent = !shouldUseChannelFallbackSound,
+    )
+    return outcome
+  }
+
+  /**
    * Plays a short 3s Ringtone (USAGE_ALARM) and/or 400ms one-shot vibration.
    * Returns true if Ringtone audio started successfully.
    */
@@ -345,3 +404,5 @@ object TimerAlarmPlayer {
     activeFocusRequest = null
   }
 }
+
+typealias AlarmPlayer = TimerAlarmPlayer

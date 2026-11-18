@@ -97,8 +97,20 @@ object NotificationHelper {
       ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
         PackageManager.PERMISSION_GRANTED
     } else {
-      true
+      NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
+  }
+
+  fun isBatteryOptimizationIgnored(context: Context): Boolean {
+    val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return false
+    return runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(false)
+  }
+
+  fun isTimerAlarmChannelSoundAllowed(context: Context): Boolean {
+    ensureNotificationChannel(context)
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
+    val channel = manager.getNotificationChannel(TIMER_ALARM_CHANNEL_ID) ?: return false
+    return channel.importance >= NotificationManager.IMPORTANCE_DEFAULT && channel.sound != null
   }
 
   fun showDailyStudyReminder(

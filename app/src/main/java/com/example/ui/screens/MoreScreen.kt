@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Upload
+import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Vibration
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -70,6 +71,7 @@ import com.example.R
 import com.example.data.preferences.UserPreferences
 import com.example.notifications.NotificationHelper
 import com.example.timer.TimerAlarmScheduler
+import com.example.ui.components.TimerPermissionsChecklistDialog
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.ErrorRed
@@ -108,6 +110,7 @@ fun MoreScreen(
   var canScheduleExactAlarms by remember {
     mutableStateOf(TimerAlarmScheduler.canScheduleExactAlarms(context))
   }
+  var showPermissionChecklistDialog by remember { mutableStateOf(false) }
 
   DisposableEffect(lifecycleOwner, context) {
     val observer = LifecycleEventObserver { _, event ->
@@ -529,6 +532,52 @@ fun MoreScreen(
 
           HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
 
+          Surface(
+            onClick = { showPermissionChecklistDialog = true },
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth().testTag("more_check_permissions_row"),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LightIndigoTint),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Outlined.VerifiedUser,
+                  contentDescription = null,
+                  tint = PrimaryIndigo,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(14.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Check permissions",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Text(
+                  text = "Notifications, exact alarms, battery, and alarm sound",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Check timer alarm permissions",
+                tint = TextSecondary,
+              )
+            }
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
           Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -872,5 +921,13 @@ fun MoreScreen(
 
       Spacer(modifier = Modifier.height(16.dp))
     }
+  }
+
+  if (showPermissionChecklistDialog) {
+    TimerPermissionsChecklistDialog(
+      isStartFlow = false,
+      onDismiss = { showPermissionChecklistDialog = false },
+      onContinue = { showPermissionChecklistDialog = false },
+    )
   }
 }

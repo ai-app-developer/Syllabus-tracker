@@ -481,6 +481,12 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
+  fun setTimerPermissionChecklistShown(shown: Boolean = true) {
+    app.applicationScope.launch {
+      withContext(Dispatchers.IO) { repository.setTimerPermissionChecklistShown(shown) }
+    }
+  }
+
   fun exportBackupToUri(uri: Uri) {
     app.applicationScope.launch(Dispatchers.IO) {
       runCatching {

@@ -17,15 +17,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Keeps the ongoing timer chronometer notification and recovery heartbeat alive.
- * Alarm delivery is handled strictly by the system AlarmManager + TimerAlarmReceiver.
+ * Runs the PRIMARY exact-time in-service timer alarm and keeps the ongoing timer chronometer
+ * notification & recovery heartbeat alive. System AlarmManager (TimerAlarmReceiver) serves
+ * as the +2000ms BACKUP trigger via the same shared TimerAlarmPlayer.fireEvent() function.
  */
 class TimerForegroundService : Service() {
   private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private var stateObserverJob: Job? = null
+  private var boundaryJob: Job? = null
   private var heartbeatJob: Job? = null
 
   override fun onBind(intent: Intent?): IBinder? = null
@@ -92,6 +95,7 @@ class TimerForegroundService : Service() {
         serviceScope.launch {
           app.database.timerDao().observeActiveTimerState().collectLatest { state ->
             if (state == null) {
+              boundaryJob?.cancel()
               stopForeground(STOP_FOREGROUND_REMOVE)
               NotificationHelper.cancelOngoingTimerNotification(this@TimerForegroundService)
               stopSelf()
@@ -99,6 +103,7 @@ class TimerForegroundService : Service() {
             }
             val meta = app.loadActiveSessionMetadataOnce() ?: return@collectLatest
             updateOngoingNotification(meta)
+            schedulePrimaryBoundaryAlarm(meta.state)
           }
         }
     }
@@ -136,8 +141,55 @@ class TimerForegroundService : Service() {
     )
   }
 
+  private fun schedulePrimaryBoundaryAlarm(state: com.example.data.local.entity.ActiveTimerStateEntity) {
+    boundaryJob?.cancel()
+    if (state.status != TimerStatus.RUNNING && state.status != TimerStatus.BREAK) {
+      return
+    }
+
+    val nowElapsed = SystemClock.elapsedRealtime()
+    val nowWall = System.currentTimeMillis()
+    val targets =
+      TimerAlarmScheduler.computeScheduledTargets(
+        state = state,
+        nowElapsedMs = nowElapsed,
+        nowWallMs = nowWall,
+        fromStoredWallTimesOnly = false,
+      )
+    if (targets.isEmpty()) return
+
+    // Pick the earliest target; on exact ties, fire GOAL_REACHED before FOCUS_END
+    // so both execute cleanly without BREAK blocking GOAL_REACHED.
+    val nextTarget =
+      targets.minWith(
+        compareBy<ScheduledAlarmTarget> { it.triggerWallMs }
+          .thenBy { if (it.eventType == TimerAlarmEventType.GOAL_REACHED) 0 else 1 }
+      )
+    val initialWaitMs = (nextTarget.triggerWallMs - nowWall).coerceAtLeast(0L)
+    val targetElapsedMs = nowElapsed + initialWaitMs
+
+    boundaryJob =
+      serviceScope.launch {
+        while (isActive) {
+          val remainingMs = targetElapsedMs - SystemClock.elapsedRealtime()
+          if (remainingMs <= 0L) break
+          delay(remainingMs)
+        }
+        if (!isActive) return@launch
+        TimerAlarmPlayer.fireEvent(
+          context = this@TimerForegroundService,
+          source = AlarmFireSource.PRIMARY,
+          eventType = nextTarget.eventType,
+          sessionId = state.sessionId,
+          phaseIndex = state.pomodoroCycle,
+          expectedEventWallMs = nextTarget.triggerWallMs,
+        )
+      }
+  }
+
   override fun onDestroy() {
     stateObserverJob?.cancel()
+    boundaryJob?.cancel()
     heartbeatJob?.cancel()
     serviceScope.cancel()
     super.onDestroy()

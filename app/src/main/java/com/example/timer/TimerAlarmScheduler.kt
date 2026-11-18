@@ -30,6 +30,7 @@ data class ScheduledAlarmTarget(
 
 object TimerAlarmScheduler {
   private const val TAG = "TimerAlarm"
+  const val BACKUP_OFFSET_MS = 2_000L
   const val LATE_THRESHOLD_MS = 15_000L
 
   const val EXTRA_EVENT_TYPE = "extra_alarm_event_type"
@@ -178,6 +179,7 @@ object TimerAlarmScheduler {
     val exactAllowed = canScheduleExactAlarms(context)
 
     for (target in targets) {
+      val backupTriggerWallMs = target.triggerWallMs + BACKUP_OFFSET_MS
       val pi =
         buildAlarmPendingIntent(
           context = context,
@@ -191,13 +193,13 @@ object TimerAlarmScheduler {
       runCatching {
         if (exactAllowed) {
           alarmManager.setAlarmClock(
-            AlarmManager.AlarmClockInfo(target.triggerWallMs, showIntent),
+            AlarmManager.AlarmClockInfo(backupTriggerWallMs, showIntent),
             pi,
           )
         } else {
           alarmManager.setAndAllowWhileIdle(
             AlarmManager.RTC_WAKEUP,
-            target.triggerWallMs,
+            backupTriggerWallMs,
             pi,
           )
         }
@@ -205,7 +207,10 @@ object TimerAlarmScheduler {
           Instant.ofEpochMilli(target.triggerWallMs)
             .atZone(ZoneId.systemDefault())
             .format(logTimeFormatter)
-        Log.d(TAG, "scheduled ${target.eventType.name} at $formattedTime (${target.triggerWallMs})")
+        Log.d(
+          TAG,
+          "scheduled primary+backup ${target.eventType.name} at $formattedTime (backup +2000ms at $backupTriggerWallMs)",
+        )
       }.onFailure { err ->
         Log.w(TAG, "Failed scheduling ${target.eventType.name}", err)
       }
@@ -293,39 +298,13 @@ class TimerAlarmReceiver : BroadcastReceiver() {
     val pendingResult: PendingResult? = goAsync()
     app.applicationScope.launch {
       try {
-        val outcome =
-          app.timerRepository.handleAlarmEvent(
-            eventType = eventType,
-            sessionId = sessionId,
-            expectedCycle = expectedCycle,
-            expectedTriggerWallMs = expectedTriggerWallMs,
-          ) ?: return@launch
-
-        Log.d("TimerAlarm", "fired ${eventType.name}, delay ${outcome.delayMs} ms")
-
-        val prefs = app.preferencesRepository.getCurrentPreferences()
-        val isTooLate = outcome.delayMs > TimerAlarmScheduler.LATE_THRESHOLD_MS
-
-        val soundStarted =
-          if (!isTooLate && (prefs.timerAlarmEnabled || prefs.timerVibrationEnabled)) {
-            TimerAlarmPlayer.playMiniAlarm(
-              context = app,
-              playSound = prefs.timerAlarmEnabled,
-              playVibration = prefs.timerVibrationEnabled,
-            )
-          } else {
-            false
-          }
-
-        val shouldUseChannelFallbackSound =
-          !isTooLate && prefs.timerAlarmEnabled && !soundStarted
-
-        NotificationHelper.showTimerAlert(
+        TimerAlarmPlayer.fireEvent(
           context = app,
-          title = outcome.title,
-          message = outcome.message,
-          notificationId = outcome.notificationId,
-          silent = !shouldUseChannelFallbackSound,
+          source = AlarmFireSource.BACKUP,
+          eventType = eventType,
+          sessionId = sessionId,
+          phaseIndex = expectedCycle,
+          expectedEventWallMs = expectedTriggerWallMs,
         )
       } finally {
         pendingResult?.finish()

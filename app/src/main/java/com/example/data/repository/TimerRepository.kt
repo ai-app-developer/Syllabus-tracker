@@ -8,6 +8,7 @@ import com.example.data.local.entity.ActiveTimerStateEntity
 import com.example.data.local.entity.ReadingSessionEntity
 import com.example.data.local.entity.SessionEventEntity
 import com.example.notifications.NotificationHelper
+import com.example.timer.AlarmFireSource
 import com.example.timer.ClockProvider
 import com.example.timer.ComputedTimerMetrics
 import com.example.timer.InMemoryAlarmDeduplicator
@@ -123,14 +124,41 @@ class TimerRepository(
     mutex.withLock {
       if (sessionStartedInCurrentProcess) return
       val existing = timerDao.getActiveTimerStateOnce() ?: return
-      onSyncAlarm(null)
       val book = syllabusDao.getBookByIdOnce(existing.bookId)
       val chapters = syllabusDao.getAllChaptersOnce()
       val chapter = chapters.firstOrNull { it.id == existing.chapterId }
       if (book == null || chapter == null) {
+        onSyncAlarm(null)
         timerDao.clearActiveTimerState()
         alarmDeduplicator.clearSession(existing.sessionId)
         return
+      }
+      if (existing.status == TimerStatus.RUNNING || existing.status == TimerStatus.BREAK) {
+        val nowWall = clock.currentTimeMillis()
+        val nowElapsed = clock.elapsedRealtime()
+        val wallTargets =
+          TimerAlarmScheduler.computeScheduledTargets(
+            state = existing,
+            nowElapsedMs = nowElapsed,
+            nowWallMs = nowWall,
+            fromStoredWallTimesOnly = true,
+          )
+        for (target in wallTargets) {
+          if (target.triggerWallMs <= nowWall) {
+            alarmDeduplicator.markSuppressed(
+              buildEventKey(existing.sessionId, existing.pomodoroCycle, target.eventType),
+              existing.sessionId,
+            )
+          }
+        }
+        val hasFutureTargets = wallTargets.any { it.triggerWallMs > nowWall }
+        if (hasFutureTargets) {
+          onSyncWallAlarms(existing)
+        } else {
+          onSyncAlarm(null)
+        }
+      } else {
+        onSyncAlarm(null)
       }
       val recoveryMetrics = TimerMath.computeLastKnownRecoveryMetrics(existing)
       _recoveryPrompt.value =
@@ -361,7 +389,10 @@ class TimerRepository(
       val newGoalMs = goalMinutes?.takeIf { it > 0 }?.let { it * 60_000L }
       val alreadyReached = newGoalMs != null && metrics.activeFocusMs >= newGoalMs
       if (!alreadyReached) {
-        alarmDeduplicator.clearEvent("GOAL", current.sessionId)
+        alarmDeduplicator.clearEvent(
+          buildEventKey(current.sessionId, current.pomodoroCycle, TimerAlarmEventType.GOAL_REACHED),
+          current.sessionId,
+        )
       }
       val updated =
         current.copy(
@@ -473,7 +504,10 @@ class TimerRepository(
           )
         )
       }
-      alarmDeduplicator.markSuppressed("BREAK_END:${current.pomodoroCycle}", current.sessionId)
+      alarmDeduplicator.markSuppressed(
+        buildEventKey(current.sessionId, current.pomodoroCycle, TimerAlarmEventType.BREAK_END),
+        current.sessionId,
+      )
       sessionStartedInCurrentProcess = true
       onSyncAlarm(updated)
       onSyncService()
@@ -481,20 +515,25 @@ class TimerRepository(
   }
 
   /**
-   * Called strictly by TimerAlarmReceiver when AlarmManager fires a scheduled alarm.
-   * Validates active state, prevents duplicates, performs one Room write/transition,
-   * and chains the next phase alarm immediately.
+   * Shared duplicate-proof firing gate called by both the PRIMARY in-service timer
+   * and the BACKUP TimerAlarmReceiver via TimerAlarmPlayer.fireEvent().
    */
-  suspend fun handleAlarmEvent(
+  suspend fun fireEvent(
+    source: AlarmFireSource = AlarmFireSource.BACKUP,
     eventType: TimerAlarmEventType,
     sessionId: String,
-    expectedCycle: Int,
-    expectedTriggerWallMs: Long,
+    phaseIndex: Int,
+    expectedEventWallMs: Long,
   ): AlarmOutcome? {
+    val eventKey = buildEventKey(sessionId, phaseIndex, eventType)
     return mutex.withLock {
-      val current = timerDao.getActiveTimerStateOnce() ?: return@withLock null
-      if (current.sessionId != sessionId) return@withLock null
+      val current = timerDao.getActiveTimerStateOnce()
+      if (current == null || current.sessionId != sessionId) {
+        Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+        return@withLock null
+      }
       if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) {
+        Log.d(ALARM_TAG, "skipped duplicate $eventKey")
         onSyncAlarm(null)
         return@withLock null
       }
@@ -502,25 +541,26 @@ class TimerRepository(
       val nowElapsed = clock.elapsedRealtime()
       val nowWall = clock.currentTimeMillis()
 
-      if (nowWall < expectedTriggerWallMs - EARLY_TOLERANCE_MS) {
+      if (source == AlarmFireSource.BACKUP && nowWall < expectedEventWallMs - EARLY_TOLERANCE_MS) {
         onSyncAlarm(current)
         return@withLock null
       }
 
-      val delayMs = (nowWall - expectedTriggerWallMs).coerceAtLeast(0L)
+      val delayMs = (nowWall - expectedEventWallMs).coerceAtLeast(0L)
 
       when (eventType) {
         TimerAlarmEventType.FOCUS_END -> {
           if (
             current.mode != TimerMode.POMODORO ||
               current.status != TimerStatus.RUNNING ||
-              current.pomodoroCycle != expectedCycle ||
+              current.pomodoroCycle != phaseIndex ||
               current.focusDurationMs <= 0L
           ) {
+            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
-          val eventKey = "FOCUS_END:$expectedCycle"
           if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
 
@@ -566,13 +606,14 @@ class TimerRepository(
           if (
             current.mode != TimerMode.POMODORO ||
               current.status != TimerStatus.BREAK ||
-              current.pomodoroCycle != expectedCycle ||
+              current.pomodoroCycle != phaseIndex ||
               current.breakDurationMs <= 0L
           ) {
+            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
-          val eventKey = "BREAK_END:$expectedCycle"
           if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
 
@@ -602,11 +643,13 @@ class TimerRepository(
         }
 
         TimerAlarmEventType.GOAL_REACHED -> {
-          val goalMs = current.goalMs ?: return@withLock null
-          if (current.goalNotified || current.status != TimerStatus.RUNNING) {
+          val goalMs = current.goalMs
+          if (goalMs == null || current.goalNotified || current.status != TimerStatus.RUNNING) {
+            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
-          if (!alarmDeduplicator.tryAcquire("GOAL", current.sessionId)) {
+          if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
 
@@ -667,7 +710,10 @@ class TimerRepository(
           val lateMs = nowWall - target.triggerWallMs
           when (target.eventType) {
             TimerAlarmEventType.GOAL_REACHED -> {
-              alarmDeduplicator.markSuppressed("GOAL", workingState.sessionId)
+              alarmDeduplicator.markSuppressed(
+                buildEventKey(workingState.sessionId, workingState.pomodoroCycle, TimerAlarmEventType.GOAL_REACHED),
+                workingState.sessionId,
+              )
               workingState = workingState.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
               timerDao.upsertActiveTimerState(workingState)
               if (lateMs <= TimerAlarmScheduler.LATE_THRESHOLD_MS) {
@@ -683,7 +729,7 @@ class TimerRepository(
             }
             TimerAlarmEventType.FOCUS_END -> {
               alarmDeduplicator.markSuppressed(
-                "FOCUS_END:${workingState.pomodoroCycle}",
+                buildEventKey(workingState.sessionId, workingState.pomodoroCycle, TimerAlarmEventType.FOCUS_END),
                 workingState.sessionId,
               )
               if (lateMs <= TimerAlarmScheduler.LATE_THRESHOLD_MS) {
@@ -709,7 +755,7 @@ class TimerRepository(
             }
             TimerAlarmEventType.BREAK_END -> {
               alarmDeduplicator.markSuppressed(
-                "BREAK_END:${workingState.pomodoroCycle}",
+                buildEventKey(workingState.sessionId, workingState.pomodoroCycle, TimerAlarmEventType.BREAK_END),
                 workingState.sessionId,
               )
               if (lateMs <= TimerAlarmScheduler.LATE_THRESHOLD_MS) {
@@ -778,15 +824,24 @@ class TimerRepository(
         saved.goalMs != null && metrics.activeFocusMs >= saved.goalMs
       val resolvedGoalNotified = saved.goalNotified || goalAlreadyPassedBeforeDeath
       if (resolvedGoalNotified) {
-        alarmDeduplicator.markSuppressed("GOAL", saved.sessionId)
+        alarmDeduplicator.markSuppressed(
+          buildEventKey(saved.sessionId, saved.pomodoroCycle, TimerAlarmEventType.GOAL_REACHED),
+          saved.sessionId,
+        )
       }
 
       if (saved.mode == TimerMode.POMODORO) {
         val wallDelta = (saved.lastKnownWallTimeMs - saved.phaseStartWallTimeMs).coerceAtLeast(0L)
         if (saved.status == TimerStatus.RUNNING && saved.focusDurationMs > 0L && wallDelta >= saved.focusDurationMs) {
-          alarmDeduplicator.markSuppressed("FOCUS_END:${saved.pomodoroCycle}", saved.sessionId)
+          alarmDeduplicator.markSuppressed(
+            buildEventKey(saved.sessionId, saved.pomodoroCycle, TimerAlarmEventType.FOCUS_END),
+            saved.sessionId,
+          )
         } else if (saved.status == TimerStatus.BREAK && saved.breakDurationMs > 0L && wallDelta >= saved.breakDurationMs) {
-          alarmDeduplicator.markSuppressed("BREAK_END:${saved.pomodoroCycle}", saved.sessionId)
+          alarmDeduplicator.markSuppressed(
+            buildEventKey(saved.sessionId, saved.pomodoroCycle, TimerAlarmEventType.BREAK_END),
+            saved.sessionId,
+          )
         }
       }
 
@@ -948,6 +1003,19 @@ class TimerRepository(
 
   companion object {
     private const val TAG = "TimerRepository"
+    private const val ALARM_TAG = "TimerAlarm"
     private const val EARLY_TOLERANCE_MS = 1500L
+
+    fun buildEventKey(
+      sessionId: String,
+      phaseIndex: Int,
+      eventType: TimerAlarmEventType,
+    ): String {
+      return if (eventType == TimerAlarmEventType.GOAL_REACHED) {
+        "$sessionId:session:${eventType.name}"
+      } else {
+        "$sessionId:$phaseIndex:${eventType.name}"
+      }
+    }
   }
 }

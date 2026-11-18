@@ -102,7 +102,7 @@ DESIGN RULES (very important)
 - **Navigation**: Navigation Compose (`@Serializable` type-safe routes)
 - **Persistence**: Room (`BookEntity`, `ChapterEntity`, `SyllabusDao`, `SyllabusDatabase`) + DataStore Preferences (`UserPreferencesRepository`)
 - **Architecture**: MVVM + `StateFlow` + Repository + Manual DI (`SyllabusApplication`)
-- **Notifications & Foreground Service**: `AlarmManager` + `BroadcastReceiver` (`StudyReminderReceiver`, `BootCompletedReceiver`, `TimerAlarmReceiver`) + `NotificationCompat`; `TimerForegroundService` (`foregroundServiceType="specialUse"`) strictly for ongoing chronometer notification (`timer_ongoing_channel`); system `AlarmManager.setAlarmClock` drives all Pomodoro/goal alarms via dedicated `"timer_alarm"` channel (`IMPORTANCE_HIGH`, `USAGE_ALARM`)
+- **Notifications & Foreground Service**: `AlarmManager` + `BroadcastReceiver` (`StudyReminderReceiver`, `BootCompletedReceiver`, `TimerAlarmReceiver`) + `NotificationCompat`; `TimerForegroundService` (`foregroundServiceType="specialUse"`) runs the ongoing chronometer notification (`timer_ongoing_channel`) and the **PRIMARY** exact coroutine boundary alarm (`elapsedRealtime()`), while `TimerAlarmScheduler` simultaneously schedules a **BACKUP** `AlarmManager.setAlarmClock` at `eventTime + 2000 ms` (`TimerAlarmReceiver`), both sharing `TimerAlarmPlayer.fireEvent(...)` with Mutex + Room + `PrefsAlarmDeduplicator` deduplication via the `"timer_alarm"` channel (`IMPORTANCE_HIGH`, `USAGE_ALARM`)
 
 ### Package / Folder Structure
 ```text
@@ -217,7 +217,7 @@ app/src/main/java/com/example/
   - [x] `TimerMath` & `TimerRepository` (monotonic clock elapsed calculation, pause/resume/lap/Pomodoro transitions, midnight day-split saving, duplicate-save guard, single-active-session guard, crash/kill/reboot recovery)
   - [x] `TimerAnalyticsCalculator` computing real `This Week` (Sat–Fri) / `This Month` / `This Year` bars, previous-period `%` delta, top-4 + `"Others"` book donut slices, today's total, and streak days
   - [x] Android 14 `TimerForegroundService` (`foregroundServiceType="specialUse"`) + ongoing chronometer notification (`Pause`/`Resume` & `Stop` actions) & milestone alerts
-- [x] **System-Driven Study Timer Alarm System (`AlarmManager.setAlarmClock`)**: Removed all in-process `Handler`/coroutine/UI alarm triggers; `TimerAlarmScheduler` schedules separate `AlarmClockInfo` intents (`FOCUS_END = 3101`, `BREAK_END = 3102`, `GOAL_REACHED = 3103`) with `setAndAllowWhileIdle` fallback; `TimerAlarmReceiver` (`exported="false"`, `goAsync()`, 15s lateness gate) plays 3s `RingtoneManager` `USAGE_ALARM` chime (bundled `res/raw/timer_alarm_beep.wav` fallback) + 400ms vibration (`VIBRATE`), posts on dedicated `"timer_alarm"` channel (`CATEGORY_ALARM`), advances Room phase, and chains the next alarm; handles reboot (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`) and time/timezone changes; includes exact-alarm prompt dialog on Start Timer, warning note + `"Battery optimization"` Flyme row in `MoreScreen`, Logcat `"TimerAlarm"` tracing, and Backup Export/Import compatibility
+- [x] **Primary + System Backup Study Timer Alarm System & Permission Checklist**: Restored in-service `TimerForegroundService` coroutine boundary wait as **PRIMARY** alarm at exact `eventTime`, paired with **BACKUP** `AlarmManager.setAlarmClock` scheduled at `eventTime + 2000 ms` (`FOCUS_END = 3101`, `BREAK_END = 3102`, `GOAL_REACHED = 3103`, `setAndAllowWhileIdle` fallback) via `TimerAlarmReceiver` (`exported="false"`, `goAsync()`); both paths invoke the shared `TimerAlarmPlayer.fireEvent(...)` -> `TimerRepository.fireEvent(...)` gated by `Mutex`, atomic Room transition/state flags (`goalNotified`, `status`, `pomodoroCycle`), and `PrefsAlarmDeduplicator` (`buildEventKey`) so whichever fires first wins cleanly and the second logs `"skipped duplicate ..."`; enforces 15s lateness gate, 3s `USAGE_ALARM` chime + 400ms vibration, `"timer_alarm"` channel notifications, boot/time/launch recovery, 6-row non-blocking `TimerPermissionsChecklistDialog` (`"Permissions needed for timer alarm"`) on first `Start Timer` tap + `More > "Check permissions"`, and Logcat `"TimerAlarm"` tracing
 - [x] `compile_applet` build verification and `gradle :app:testDebugUnitTest` Robolectric test suite (`ExampleRobolectricTest` + `TimerRobolectricTest`)
 
 ### Pending (Phase 2 — Full Goals, Calendar Heatmap, Insights)
@@ -546,6 +546,31 @@ REQUIRED ARCHITECTURE (system-driven, not process-driven)
 
 ---
 
-## 13. Resume Prompt
+## 13. Primary + Backup Alarm System & Permission Checklist Dialog (Bug Fix)
 
-Read this file fully and continue building any remaining Phase 2/3 items without altering the 5-screen UI reference design.
+### Bug Fix Request (Verbatim Scope)
+```text
+BUG FIX for the existing "Syllabus Tracker" Android app (Kotlin + Compose + Room). Read read.md first. Do NOT change UI design (except the new permission dialog below), database schema, widgets, or timer calculation logic. Do NOT remove the current in-service alarm. It worked correctly when battery was set to Unrestricted. Only ADD a system-level backup and a permission checklist dialog.
+
+PROBLEM
+Sometimes the mini alarm (Pomodoro focus end, break end, goal reached) plays late, only after the app is opened, because the OS freezes the in-service Handler/coroutine.
+
+SOLUTION: PRIMARY + BACKUP (both always scheduled together)
+1. PRIMARY (keep as is): the in-service Handler/coroutine alarm that fires at the exact event time.
+2. BACKUP (new): for every upcoming event (focus end, break end, goal reached) ALSO schedule AlarmManager.setAlarmClock(AlarmClockInfo, PendingIntent) at eventTime + 2000 ms. Use PendingIntent.FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT with a unique requestCode per event type. Trigger wall-clock time = System.currentTimeMillis() + remainingMillis + 2000.
+3. Shared fire path & duplicate prevention: shared AlarmPlayer.fireEvent(...), guarded by Mutex + Room state + PrefsAlarmDeduplicator so whichever fires first executes sound/vibration/notification/phase advance once and the second skips cleanly. Skip sound/vibration if delay > 15s.
+4. Cancel/reschedule both primary & backup together; restore backup alarms on BOOT_COMPLETED, MY_PACKAGE_REPLACED, TIME_CHANGED, TIMEZONE_CHANGED, and app start.
+5. Permission Checklist Dialog ("Permissions needed for timer alarm"): shown on first Start Timer tap (non-blocking, "Continue anyway") and accessible in More > Timer Alarm > "Check permissions", with 6 rows (Notifications, Alarms & reminders, Battery: Unrestricted, Alarm notification channel sound, Do Not Disturb note, Flyme / Meizu note) and live re-check on ON_RESUME.
+```
+
+### Architecture Summary
+- **PRIMARY (`TimerForegroundService`)**: Observes `TimerRepository.observeActiveTimerState()`, computes exact remaining duration from `SystemClock.elapsedRealtime()` (`GOAL_REACHED` prioritized before `FOCUS_END` on exact tie), delays until exact event time, and invokes `TimerAlarmPlayer.fireEvent(..., AlarmFireSource.PRIMARY, ...)`.
+- **BACKUP (`TimerAlarmScheduler` + `TimerAlarmReceiver`)**: For every `RUNNING`/`BREAK` target (`FOCUS_END = 3101`, `BREAK_END = 3102`, `GOAL_REACHED = 3103`), schedules `AlarmManager.setAlarmClock` at `triggerWallMs + 2000 ms` (`setAndAllowWhileIdle` fallback if `canScheduleExactAlarms()` is false) while carrying exact `triggerWallMs` in `EXTRA_TRIGGER_WALL_MS` for accurate lateness calculation (`delayMs = nowWall - triggerWallMs`). `TimerAlarmReceiver` (`exported="false"`, `goAsync()`) calls `TimerAlarmPlayer.fireEvent(..., AlarmFireSource.BACKUP, ...)`.
+- **Shared Fire Gate (`TimerAlarmPlayer.fireEvent` & `TimerRepository.fireEvent`)**: Serialized by `Mutex` + Room state checks + `PrefsAlarmDeduplicator` (`buildEventKey`). First path advances phase/goal and chains next alarms; second logs `TimerAlarm: skipped duplicate <key>` and exits cleanly.
+- **Permission Checklist Dialog (`TimerPermissionsChecklistDialog`)**: Tracked via DataStore `timerPermissionChecklistShown` so it appears automatically once on first `Start Timer` tap (non-blocking `"Continue anyway"` starts the timer immediately) and anytime from **More > Check permissions**, refreshing permission badges on `Lifecycle.Event.ON_RESUME`.
+
+---
+
+## 14. Resume Prompt
+
+Read this file fully before editing to keep Room schema (`version = 2`), UI screens, RemoteViews widgets, `TimerMath`, and the Primary + Backup alarm system intact.
