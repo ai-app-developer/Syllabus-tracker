@@ -694,3 +694,48 @@ private fun SummaryMetricRow(label: String, value: String) {
     )
   }
 }
+
+@Composable
+fun ExactAlarmPermissionDialog(
+  onAllow: () -> Unit,
+  onDecline: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDecline,
+    containerColor = CardSurface,
+    shape = RoundedCornerShape(16.dp),
+    title = {
+      Text(
+        text = "Alarms & Reminders",
+        style = MaterialTheme.typography.titleLarge,
+        color = TextPrimary,
+      )
+    },
+    text = {
+      Text(
+        text = "Allow Alarms & reminders so the timer alarm rings on time",
+        style = MaterialTheme.typography.bodyMedium,
+        color = TextSecondary,
+      )
+    },
+    confirmButton = {
+      Button(
+        onClick = onAllow,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        modifier = Modifier.testTag("exact_alarm_allow_button"),
+      ) {
+        Text("Allow", color = Color.White)
+      }
+    },
+    dismissButton = {
+      TextButton(
+        onClick = onDecline,
+        modifier = Modifier.testTag("exact_alarm_decline_button"),
+      ) {
+        Text("Continue anyway", color = TextSecondary)
+      }
+    },
+  )
+}
+

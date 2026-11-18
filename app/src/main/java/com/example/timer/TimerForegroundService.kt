@@ -16,11 +16,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
+/**
+ * Keeps the ongoing timer chronometer notification and recovery heartbeat alive.
+ * Alarm delivery is handled strictly by the system AlarmManager + TimerAlarmReceiver.
+ */
 class TimerForegroundService : Service() {
   private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-  private var boundaryWatcherJob: Job? = null
+  private var stateObserverJob: Job? = null
+  private var heartbeatJob: Job? = null
 
   override fun onBind(intent: Intent?): IBinder? = null
 
@@ -74,75 +80,65 @@ class TimerForegroundService : Service() {
         startForeground(NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID, notification)
       }
 
-      TimerAlarmScheduler.syncAlarm(this@TimerForegroundService, meta.state)
-      scheduleNextBoundaryAndHeartbeat(app)
+      startOngoingObservationAndHeartbeat(app)
     }
 
     return START_STICKY
   }
 
-  private fun scheduleNextBoundaryAndHeartbeat(app: SyllabusApplication) {
-    boundaryWatcherJob?.cancel()
-    boundaryWatcherJob =
-      serviceScope.launch {
-        while (true) {
-          val meta = app.loadActiveSessionMetadataOnce() ?: break
-          val state = meta.state
-          val nowElapsed = SystemClock.elapsedRealtime()
-          val nowWall = System.currentTimeMillis()
-          val metrics = TimerMath.computeMetrics(state, nowElapsed, nowWall)
-
-          val effectiveRunning =
-            state.status == TimerStatus.RUNNING || state.status == TimerStatus.BREAK
-          if (!effectiveRunning) {
-            TimerAlarmScheduler.cancelAlarm(this@TimerForegroundService)
-            break
-          }
-
-          val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-          manager.notify(
-            NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID,
-            NotificationHelper.buildOngoingTimerNotification(
-              context = this@TimerForegroundService,
-              state = state,
-              bookName = meta.bookName,
-              chapterLabel = meta.chapterLabel,
-              metrics = metrics,
-              nowWallTimeMs = nowWall,
-            ),
-          )
-
-          val targetElapsedMs = TimerAlarmScheduler.computeNextTriggerElapsedMs(state)
-          val remainingToTarget =
-            if (targetElapsedMs != null) {
-              (targetElapsedMs - nowElapsed).coerceAtLeast(0L)
-            } else {
-              30_000L
+  private fun startOngoingObservationAndHeartbeat(app: SyllabusApplication) {
+    if (stateObserverJob?.isActive != true) {
+      stateObserverJob =
+        serviceScope.launch {
+          app.database.timerDao().observeActiveTimerState().collectLatest { state ->
+            if (state == null) {
+              stopForeground(STOP_FOREGROUND_REMOVE)
+              NotificationHelper.cancelOngoingTimerNotification(this@TimerForegroundService)
+              stopSelf()
+              return@collectLatest
             }
-          val waitMs = minOf(30_000L, remainingToTarget)
-          if (waitMs > 0L) {
-            delay(waitMs)
-          } else {
-            delay(50L)
+            val meta = app.loadActiveSessionMetadataOnce() ?: return@collectLatest
+            updateOngoingNotification(meta)
           }
-
-          if (targetElapsedMs != null && remainingToTarget <= 30_000L) {
-            val afterWakeElapsed = SystemClock.elapsedRealtime()
-            val tinyRemaining = targetElapsedMs - afterWakeElapsed
-            if (tinyRemaining in 1L..500L) {
-              delay(tinyRemaining)
-            }
-          }
-
-          app.timerRepository.touchLastKnownWallTime()
-          app.timerRepository.checkAndMarkGoalAlertIfReached()
-          app.timerRepository.advancePomodoroPhaseIfDue()
         }
-      }
+    }
+
+    if (heartbeatJob?.isActive != true) {
+      heartbeatJob =
+        serviceScope.launch {
+          while (true) {
+            delay(30_000L)
+            val meta = app.loadActiveSessionMetadataOnce() ?: break
+            if (meta.state.status == TimerStatus.RUNNING || meta.state.status == TimerStatus.BREAK) {
+              app.timerRepository.touchLastKnownWallTime()
+              updateOngoingNotification(meta)
+            }
+          }
+        }
+    }
+  }
+
+  private fun updateOngoingNotification(meta: com.example.data.repository.ActiveSessionMetadata) {
+    val nowElapsed = SystemClock.elapsedRealtime()
+    val nowWall = System.currentTimeMillis()
+    val metrics = TimerMath.computeMetrics(meta.state, nowElapsed, nowWall)
+    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    manager.notify(
+      NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID,
+      NotificationHelper.buildOngoingTimerNotification(
+        context = this@TimerForegroundService,
+        state = meta.state,
+        bookName = meta.bookName,
+        chapterLabel = meta.chapterLabel,
+        metrics = metrics,
+        nowWallTimeMs = nowWall,
+      ),
+    )
   }
 
   override fun onDestroy() {
-    boundaryWatcherJob?.cancel()
+    stateObserverJob?.cancel()
+    heartbeatJob?.cancel()
     serviceScope.cancel()
     super.onDestroy()
   }

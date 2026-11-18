@@ -102,7 +102,7 @@ DESIGN RULES (very important)
 - **Navigation**: Navigation Compose (`@Serializable` type-safe routes)
 - **Persistence**: Room (`BookEntity`, `ChapterEntity`, `SyllabusDao`, `SyllabusDatabase`) + DataStore Preferences (`UserPreferencesRepository`)
 - **Architecture**: MVVM + `StateFlow` + Repository + Manual DI (`SyllabusApplication`)
-- **Notifications & Foreground Service**: `AlarmManager` + `BroadcastReceiver` (`StudyReminderReceiver`, `BootCompletedReceiver`) + `NotificationCompat`; `TimerForegroundService` (`foregroundServiceType="specialUse"`) with ongoing chronometer notification & milestone alerts (`timer_ongoing_channel`, `timer_alerts_channel`)
+- **Notifications & Foreground Service**: `AlarmManager` + `BroadcastReceiver` (`StudyReminderReceiver`, `BootCompletedReceiver`, `TimerAlarmReceiver`) + `NotificationCompat`; `TimerForegroundService` (`foregroundServiceType="specialUse"`) strictly for ongoing chronometer notification (`timer_ongoing_channel`); system `AlarmManager.setAlarmClock` drives all Pomodoro/goal alarms via dedicated `"timer_alarm"` channel (`IMPORTANCE_HIGH`, `USAGE_ALARM`)
 
 ### Package / Folder Structure
 ```text
@@ -217,7 +217,7 @@ app/src/main/java/com/example/
   - [x] `TimerMath` & `TimerRepository` (monotonic clock elapsed calculation, pause/resume/lap/Pomodoro transitions, midnight day-split saving, duplicate-save guard, single-active-session guard, crash/kill/reboot recovery)
   - [x] `TimerAnalyticsCalculator` computing real `This Week` (Sat–Fri) / `This Month` / `This Year` bars, previous-period `%` delta, top-4 + `"Others"` book donut slices, today's total, and streak days
   - [x] Android 14 `TimerForegroundService` (`foregroundServiceType="specialUse"`) + ongoing chronometer notification (`Pause`/`Resume` & `Stop` actions) & milestone alerts
-- [x] **Study Timer Mini Alarm System**: Short 2.8s `USAGE_ALARM` chime (`TimerAlarmPlayer`) + 400ms one-shot vibration (`VIBRATE`), DND filtering, persistent per-phase/goal deduplication (`PrefsAlarmDeduplicator`), crash-recovery stale suppression, `ELAPSED_REALTIME_WAKEUP` backup scheduler (`TimerAlarmScheduler` / `TimerAlarmReceiver`), `MoreScreen` switches (`Timer Alarm`, `Vibration`, system alarm volume note), and Backup Export/Import support
+- [x] **System-Driven Study Timer Alarm System (`AlarmManager.setAlarmClock`)**: Removed all in-process `Handler`/coroutine/UI alarm triggers; `TimerAlarmScheduler` schedules separate `AlarmClockInfo` intents (`FOCUS_END = 3101`, `BREAK_END = 3102`, `GOAL_REACHED = 3103`) with `setAndAllowWhileIdle` fallback; `TimerAlarmReceiver` (`exported="false"`, `goAsync()`, 15s lateness gate) plays 3s `RingtoneManager` `USAGE_ALARM` chime (bundled `res/raw/timer_alarm_beep.wav` fallback) + 400ms vibration (`VIBRATE`), posts on dedicated `"timer_alarm"` channel (`CATEGORY_ALARM`), advances Room phase, and chains the next alarm; handles reboot (`BOOT_COMPLETED`, `MY_PACKAGE_REPLACED`) and time/timezone changes; includes exact-alarm prompt dialog on Start Timer, warning note + `"Battery optimization"` Flyme row in `MoreScreen`, Logcat `"TimerAlarm"` tracing, and Backup Export/Import compatibility
 - [x] `compile_applet` build verification and `gradle :app:testDebugUnitTest` Robolectric test suite (`ExampleRobolectricTest` + `TimerRobolectricTest`)
 
 ### Pending (Phase 2 — Full Goals, Calendar Heatmap, Insights)
@@ -516,23 +516,36 @@ The visual design follows the 5-screen UI reference image across every core scre
 
 ---
 
-## 12. Study Timer Mini Alarm Addition (Feature Summary & Architecture)
+## 12. System-Driven Study Timer Alarm Architecture (Bug Fix)
 
-### Trigger Events
-1. **Pomodoro Focus Complete**: Plays immediately when Focus ends and Break starts (`FOCUS_END:<cycle>`).
-2. **Pomodoro Break Complete**: Plays immediately when Break ends and the next Focus cycle starts (`BREAK_END:<cycle>`).
-3. **Session Goal Reached**: Plays immediately once per session when the user's goal time is reached in Stopwatch or Pomodoro mode (`GOAL`).
+### Bug Fix Request (Summary / Verbatim Scope)
+```text
+BUG FIX for the existing "Syllabus Tracker" Android app (Kotlin + Compose + Room). Read read.md first. Do NOT change UI, database schema, widgets or timer calculation logic. Only rebuild the Timer Alarm delivery so it fires at the exact time even when the app is in the background, screen off, or the process is frozen.
 
-### Architecture
-- **`TimerAlarmPlayer`**: Plays a non-looping ~2.8s default notification/alarm chime using `AudioAttributes.USAGE_ALARM` + `CONTENT_TYPE_SONIFICATION` and `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`, auto-stopping and releasing `MediaPlayer` + audio focus cleanly, plus a 400ms one-shot `VibrationEffect` (`VIBRATE`). Respects Android Do Not Disturb (`INTERRUPTION_FILTER_NONE` / priority policies excluding alarms).
-- **`TimerAlarmScheduler` & `TimerAlarmReceiver`**: Computes the earliest next phase/goal `elapsedRealtime` deadline from `ActiveTimerStateEntity` and maintains a backup `AlarmManager.ELAPSED_REALTIME_WAKEUP` trigger (`setExactAndAllowWhileIdle` when `canScheduleExactAlarms()` holds on API 31+, falling back safely to `setAndAllowWhileIdle`). Automatically cancelled on Pause/Stop/Discard/Save/Crash launch and rescheduled on Start/Resume/Skip Break/Phase advance.
-- **Deduplication & Stale Suppression**: `PrefsAlarmDeduplicator` + `TimerRepository` ensure no phase or goal alert replays twice, and `resumeRecoveredSession()` suppresses any phase/goal alarm that already elapsed prior to process death/reboot.
-- **Settings & Backup**: `UserPreferencesRepository` persists `timerAlarmEnabled` (default `true`) and `timerVibrationEnabled` (default `true`), exposed in `MoreScreen` alongside the plain info row `"Alarm volume uses system alarm volume"`, and included in `BackupSettings` while preserving backward-compatible v1 JSON imports.
+PROBLEM
+The mini alarm (Pomodoro focus end, break end, goal reached) does not play on time when the app is in the background. It plays late only after I open the app. Cause: the alarm is triggered from an in-process Handler/coroutine/UI, which Meizu Flyme freezes or kills.
+
+REQUIRED ARCHITECTURE (system-driven, not process-driven)
+1. Remove every Handler/coroutine/UI-based alarm trigger. The only trigger is the system AlarmManager.
+2. Schedule each upcoming event (focus end, break end, goal reached) with AlarmManager.setAlarmClock(AlarmClockInfo, PendingIntent). setAlarmClock is exempt from Doze and app standby and fires exactly on time. Calculate the trigger wall-clock time = System.currentTimeMillis() + remainingMillis.
+3. Schedule Focus end and Goal reached separately with unique request codes (3101, 3102, 3103).
+4. TimerAlarmReceiver (exported="false", goAsync()): validate active/unpaused/matching session & cycle, skip sound/vibration if delay > 15s (post notification only), play 3s USAGE_ALARM Ringtone (fallback bundled raw beep) + 400ms vibration, post on channel "timer_alarm" (IMPORTANCE_HIGH, CATEGORY_ALARM, channel alarm sound fallback), advance Room phase and chain next alarm directly in receiver.
+5. Reschedule / cancel cleanly on Start, Pause, Resume, Stop/Discard/Save, Skip Break, Goal change, Reboot/App Update, and Time/Timezone change.
+6. Exact alarm permission prompt before Start Timer ("Allow Alarms & reminders so the timer alarm rings on time"), fallback to setAndAllowWhileIdle + warning note in More if declined, and Battery optimization row in More for Flyme.
+```
+
+### Removed vs Added
+- **Removed**:
+  - In-process `TimerForegroundService` boundary waits and phase/goal milestone triggers (`advancePomodoroPhaseIfDue` / `checkAndMarkGoalAlertIfReached`).
+  - `TimerViewModel` UI collector calls to `advancePomodoroPhaseIfDue` / `checkAndMarkGoalAlertIfReached`.
+  - `TimerRepository.onTimerAlert` / `TimerAlertType` in-process trigger pipeline and `MediaPlayer`/`Handler` alarm stopping.
+- **Added**:
+  - `TimerAlarmScheduler` using `AlarmManager.setAlarmClock(AlarmClockInfo, PendingIntent)` (`PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE`) with unique request codes (`FOCUS_END = 3101`, `BREAK_END = 3102`, `GOAL_REACHED = 3103`) and `setAndAllowWhileIdle` fallback when exact alarm permission is denied.
+  - `TimerAlarmReceiver` (`exported="false"`, `goAsync()`) handling validation, 15-second lateness suppression, 3s `RingtoneManager` `USAGE_ALARM` playback (`res/raw/timer_alarm_beep.wav` fallback) + 400ms vibration via `TimerAlarmPlayer`, `"timer_alarm"` channel notifications (`NotificationHelper`), and atomic Room state advancement + chained scheduling via `TimerRepository.handleAlarmEvent`.
+  - `BootCompletedReceiver` + `SyllabusApplication` clock/reboot handling (`handleSystemTimeOrBootReschedule`), `ExactAlarmPermissionDialog`, exact-alarm pre-start check in `StudyTimerSetupScreen`, and conditional exact-alarm warning + `"Battery optimization"` row in `MoreScreen`.
 
 ---
 
 ## 13. Resume Prompt
 
 Read this file fully and continue building any remaining Phase 2/3 items without altering the 5-screen UI reference design.
-
-

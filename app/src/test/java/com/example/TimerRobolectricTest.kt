@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.AlarmManager
 import android.app.NotificationManager
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
@@ -13,13 +14,13 @@ import com.example.data.local.SyllabusDatabase
 import com.example.data.local.entity.ActiveTimerStateEntity
 import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
-import com.example.data.preferences.UserPreferences
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.SyllabusRepository
-import com.example.data.repository.TimerAlertType
 import com.example.data.repository.TimerRepository
 import com.example.timer.ClockProvider
 import com.example.timer.PrefsAlarmDeduplicator
+import com.example.timer.ScheduledAlarmTarget
+import com.example.timer.TimerAlarmEventType
 import com.example.timer.TimerAlarmPlayer
 import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerMath
@@ -39,7 +40,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAlarmManager
 
 private class FakeClock(
   var elapsedMs: Long = 10_000L,
@@ -142,7 +145,6 @@ class TimerRobolectricTest {
           notes = "Wave optics",
         )
       )
-      // Single active session guard
       assertFalse(
         repo.startSession(bookId = bookId, chapterId = chapterId, mode = TimerMode.STOPWATCH)
       )
@@ -213,7 +215,6 @@ class TimerRobolectricTest {
       clock.advance(45_000L)
       repo.touchLastKnownWallTime()
 
-      // Simulate cold app restart / process death with a fresh TimerRepository instance
       clock.advance(5_000_000L)
       val freshRepo =
         TimerRepository(
@@ -236,33 +237,435 @@ class TimerRobolectricTest {
     }
 
   @Test
-  fun `pomodoro transitions to break at phase end and skipBreak advances cycle`() = runTest {
-    val bookId = db.syllabusDao().insertBook(BookEntity(name = "Biology"))
-    val chapterId =
-      db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Cells", number = 1))
+  fun `pomodoro transitions via handleAlarmEvent chains next phase and skipBreak suppresses break end`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Biology"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Cells", number = 1))
 
-    assertTrue(
-      repo.startSession(
-        bookId = bookId,
-        chapterId = chapterId,
-        mode = TimerMode.POMODORO,
-        focusMinutes = 25,
-        breakMinutes = 5,
+      val syncedTargets = mutableListOf<List<ScheduledAlarmTarget>>()
+      val dedup = PrefsAlarmDeduplicator(context)
+      val alarmRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          alarmDeduplicator = dedup,
+          onSyncAlarm = { state ->
+            syncedTargets.add(
+              TimerAlarmScheduler.computeScheduledTargets(
+                state = state,
+                nowElapsedMs = clock.elapsedMs,
+                nowWallMs = clock.wallMs,
+              )
+            )
+          },
+        )
+
+      assertTrue(
+        alarmRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
       )
-    )
+      val startTargets = syncedTargets.last()
+      assertEquals(1, startTargets.size)
+      assertEquals(TimerAlarmEventType.FOCUS_END, startTargets[0].eventType)
+      val focusTriggerWall = clock.wallMs + 25 * 60_000L
+      assertEquals(focusTriggerWall, startTargets[0].triggerWallMs)
+      val sessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
 
-    clock.advance(25 * 60_000L)
-    repo.advancePomodoroPhaseIfDue()
-    val inBreak = db.timerDao().getActiveTimerStateOnce()!!
-    assertEquals(TimerStatus.BREAK, inBreak.status)
-    assertEquals(25 * 60_000L, inBreak.accumulatedFocusMs)
+      // Focus ends -> enters BREAK, returns outcome once, and immediately chains BREAK_END
+      clock.advance(25 * 60_000L)
+      val focusOutcome =
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          expectedCycle = 1,
+          expectedTriggerWallMs = focusTriggerWall,
+        )
+      assertNotNull(focusOutcome)
+      assertEquals("Break started", focusOutcome!!.title)
+      assertEquals(0L, focusOutcome.delayMs)
+      assertEquals(TimerStatus.BREAK, focusOutcome.updatedState.status)
+      assertEquals(25 * 60_000L, focusOutcome.updatedState.accumulatedFocusMs)
 
-    clock.advance(60_000L)
-    repo.skipBreak()
-    val resumedFocus = db.timerDao().getActiveTimerStateOnce()!!
-    assertEquals(TimerStatus.RUNNING, resumedFocus.status)
-    assertEquals(2, resumedFocus.pomodoroCycle)
+      // Duplicate broadcast is ignored
+      assertNull(
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          expectedCycle = 1,
+          expectedTriggerWallMs = focusTriggerWall,
+        )
+      )
+
+      val breakTargets = syncedTargets.last()
+      assertEquals(1, breakTargets.size)
+      assertEquals(TimerAlarmEventType.BREAK_END, breakTargets[0].eventType)
+      val breakTriggerWall = clock.wallMs + 5 * 60_000L
+      assertEquals(breakTriggerWall, breakTargets[0].triggerWallMs)
+
+      // Break ends -> advances to cycle 2 RUNNING and chains cycle 2 FOCUS_END
+      clock.advance(5 * 60_000L)
+      val breakOutcome =
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.BREAK_END,
+          sessionId = sessionId,
+          expectedCycle = 1,
+          expectedTriggerWallMs = breakTriggerWall,
+        )
+      assertNotNull(breakOutcome)
+      assertEquals("Break over, back to focus", breakOutcome!!.title)
+      assertEquals(TimerStatus.RUNNING, breakOutcome.updatedState.status)
+      assertEquals(2, breakOutcome.updatedState.pomodoroCycle)
+
+      val cycle2Targets = syncedTargets.last()
+      assertEquals(1, cycle2Targets.size)
+      assertEquals(TimerAlarmEventType.FOCUS_END, cycle2Targets[0].eventType)
+      val cycle2TriggerWall = clock.wallMs + 25 * 60_000L
+
+      // Reach cycle 2 break, then skipBreak -> skips to cycle 3 and rejects stale cycle-2 BREAK_END
+      clock.advance(25 * 60_000L)
+      assertNotNull(
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          expectedCycle = 2,
+          expectedTriggerWallMs = cycle2TriggerWall,
+        )
+      )
+      alarmRepo.skipBreak()
+      val afterSkipState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.RUNNING, afterSkipState.status)
+      assertEquals(3, afterSkipState.pomodoroCycle)
+      assertEquals(TimerAlarmEventType.FOCUS_END, syncedTargets.last().single().eventType)
+
+      clock.advance(5 * 60_000L)
+      assertNull(
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.BREAK_END,
+          sessionId = sessionId,
+          expectedCycle = 2,
+          expectedTriggerWallMs = clock.wallMs,
+        )
+      )
+    }
+
+  @Test
+  fun `pomodoro with goal schedules both alarms separately, cancels goal during break, and reschedules on goal edit`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Math"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Calculus", number = 1))
+
+      val syncedTargets = mutableListOf<List<ScheduledAlarmTarget>>()
+      val alarmRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onSyncAlarm = { state ->
+            syncedTargets.add(
+              TimerAlarmScheduler.computeScheduledTargets(
+                state = state,
+                nowElapsedMs = clock.elapsedMs,
+                nowWallMs = clock.wallMs,
+              )
+            )
+          },
+        )
+
+      assertTrue(
+        alarmRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+          goalMinutes = 40,
+        )
+      )
+
+      val initialTargets = syncedTargets.last()
+      assertEquals(2, initialTargets.size)
+      assertEquals(clock.wallMs + 25 * 60_000L, initialTargets.first { it.eventType == TimerAlarmEventType.FOCUS_END }.triggerWallMs)
+      assertEquals(clock.wallMs + 40 * 60_000L, initialTargets.first { it.eventType == TimerAlarmEventType.GOAL_REACHED }.triggerWallMs)
+
+      val sessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
+      clock.advance(25 * 60_000L)
+      assertNotNull(
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          expectedCycle = 1,
+          expectedTriggerWallMs = clock.wallMs,
+        )
+      )
+      // During BREAK, only BREAK_END is scheduled (goal paused during break)
+      assertEquals(listOf(TimerAlarmEventType.BREAK_END), syncedTargets.last().map { it.eventType })
+
+      clock.advance(5 * 60_000L)
+      assertNotNull(
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.BREAK_END,
+          sessionId = sessionId,
+          expectedCycle = 1,
+          expectedTriggerWallMs = clock.wallMs,
+        )
+      )
+      // Cycle 2 RUNNING: 25m already accumulated toward 40m goal -> GOAL_REACHED at +15m
+      val cycle2Targets = syncedTargets.last()
+      assertEquals(2, cycle2Targets.size)
+      assertEquals(clock.wallMs + 25 * 60_000L, cycle2Targets.first { it.eventType == TimerAlarmEventType.FOCUS_END }.triggerWallMs)
+      assertEquals(clock.wallMs + 15 * 60_000L, cycle2Targets.first { it.eventType == TimerAlarmEventType.GOAL_REACHED }.triggerWallMs)
+
+      // Update goal mid-session from 40m to 60m -> GOAL_REACHED shifts to +35m remaining
+      alarmRepo.updateActiveGoal(60)
+      assertEquals(
+        clock.wallMs + 35 * 60_000L,
+        syncedTargets.last().first { it.eventType == TimerAlarmEventType.GOAL_REACHED }.triggerWallMs,
+      )
+
+      // Fire GOAL_REACHED at +35m
+      clock.advance(35 * 60_000L)
+      val goalOutcome =
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.GOAL_REACHED,
+          sessionId = sessionId,
+          expectedCycle = 2,
+          expectedTriggerWallMs = clock.wallMs,
+        )
+      assertNotNull(goalOutcome)
+      assertEquals("Goal completed", goalOutcome!!.title)
+      assertTrue(goalOutcome.updatedState.goalNotified)
+
+      // Raising goal above 60m after goal already fired clears dedup and schedules new goal
+      alarmRepo.updateActiveGoal(70)
+      val raisedGoalTarget =
+        syncedTargets.last().firstOrNull { it.eventType == TimerAlarmEventType.GOAL_REACHED }
+      assertNotNull(raisedGoalTarget)
+      assertEquals(clock.wallMs + 10 * 60_000L, raisedGoalTarget!!.triggerWallMs)
+    }
+
+  @Test
+  fun `stopwatch goal pause cancels alarms resume reschedules remaining and 15s lateness is reported`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Chemistry"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Acids", number = 1))
+
+      val syncedTargets = mutableListOf<List<ScheduledAlarmTarget>>()
+      val alarmRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onSyncAlarm = { state ->
+            syncedTargets.add(
+              TimerAlarmScheduler.computeScheduledTargets(
+                state = state,
+                nowElapsedMs = clock.elapsedMs,
+                nowWallMs = clock.wallMs,
+              )
+            )
+          },
+        )
+
+      assertTrue(
+        alarmRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.STOPWATCH,
+          goalMinutes = 10,
+        )
+      )
+      val sessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
+      assertEquals(clock.wallMs + 10 * 60_000L, syncedTargets.last().single().triggerWallMs)
+
+      // Pause after 4m -> cancels all alarms
+      clock.advance(4 * 60_000L)
+      alarmRepo.pauseSession()
+      assertTrue(syncedTargets.last().isEmpty())
+
+      // Firing while paused returns null
+      clock.advance(20 * 60_000L)
+      assertNull(
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.GOAL_REACHED,
+          sessionId = sessionId,
+          expectedCycle = 1,
+          expectedTriggerWallMs = clock.wallMs - 14 * 60_000L,
+        )
+      )
+
+      // Resume -> reschedules remaining 6m from current wall time
+      alarmRepo.resumeSession()
+      val resumedTriggerWall = clock.wallMs + 6 * 60_000L
+      assertEquals(resumedTriggerWall, syncedTargets.last().single().triggerWallMs)
+
+      // Fire 18s late -> receiver uses outcome.delayMs > 15_000L to skip sound/vibration
+      clock.advance(6 * 60_000L + 18_000L)
+      val lateOutcome =
+        alarmRepo.handleAlarmEvent(
+          eventType = TimerAlarmEventType.GOAL_REACHED,
+          sessionId = sessionId,
+          expectedCycle = 1,
+          expectedTriggerWallMs = resumedTriggerWall,
+        )
+      assertNotNull(lateOutcome)
+      assertEquals(18_000L, lateOutcome!!.delayMs)
+      assertTrue(lateOutcome.delayMs > TimerAlarmScheduler.LATE_THRESHOLD_MS)
+    }
+
+  @Test
+  fun `alarm scheduler uses AlarmManager setAlarmClock when allowed and cancels cleanly`() {
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val shadowAlarmManager = Shadows.shadowOf(alarmManager)
+    ShadowAlarmManager.setCanScheduleExactAlarms(true)
+
+    val state =
+      ActiveTimerStateEntity(
+        id = 1,
+        sessionId = "sess-alarm-clock",
+        bookId = 1L,
+        chapterId = 1L,
+        mode = TimerMode.POMODORO,
+        status = TimerStatus.RUNNING,
+        focusDurationMs = 25 * 60_000L,
+        breakDurationMs = 5 * 60_000L,
+        goalMs = 60 * 60_000L,
+        notes = "",
+        sessionStartWallTimeMs = clock.wallMs,
+        phaseStartElapsedMs = clock.elapsedMs,
+        phaseStartWallTimeMs = clock.wallMs,
+        accumulatedFocusMs = 0L,
+        accumulatedBreakMs = 0L,
+        accumulatedPauseMs = 0L,
+        pauseStartElapsedMs = null,
+        pauseStartWallTimeMs = null,
+        lastKnownWallTimeMs = clock.wallMs,
+        lapCount = 0,
+        goalNotified = false,
+        pomodoroCycle = 1,
+        statusBeforeStopSummary = null,
+      )
+
+    TimerAlarmScheduler.syncAlarms(context, state, clock)
+    val timerActions = TimerAlarmEventType.entries.map { it.action }.toSet()
+    val scheduledTimerAlarms =
+      shadowAlarmManager.scheduledAlarms.filter {
+        Shadows.shadowOf(it.operation).savedIntent.action in timerActions
+      }
+    assertEquals(2, scheduledTimerAlarms.size)
+    assertNotNull(alarmManager.nextAlarmClock)
+
+    TimerAlarmScheduler.cancelAllAlarms(context)
+    val remainingTimerAlarms =
+      shadowAlarmManager.scheduledAlarms.filter {
+        Shadows.shadowOf(it.operation).savedIntent.action in timerActions
+      }
+    assertTrue(remainingTimerAlarms.isEmpty())
+    assertNull(alarmManager.nextAlarmClock)
+    ShadowAlarmManager.setCanScheduleExactAlarms(false)
   }
+
+  @Test
+  fun `boot and time change reschedule behavior handles stale suppression and future wall times`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "History"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Empires", number = 1))
+
+      val syncedWallTargets = mutableListOf<List<ScheduledAlarmTarget>>()
+      val syncedNormalTargets = mutableListOf<List<ScheduledAlarmTarget>>()
+      val bootRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onSyncAlarm = { state ->
+            syncedNormalTargets.add(
+              TimerAlarmScheduler.computeScheduledTargets(
+                state = state,
+                nowElapsedMs = clock.elapsedMs,
+                nowWallMs = clock.wallMs,
+                fromStoredWallTimesOnly = false,
+              )
+            )
+          },
+          onSyncWallAlarms = { state ->
+            syncedWallTargets.add(
+              TimerAlarmScheduler.computeScheduledTargets(
+                state = state,
+                nowElapsedMs = clock.elapsedMs,
+                nowWallMs = clock.wallMs,
+                fromStoredWallTimesOnly = true,
+              )
+            )
+          },
+        )
+
+      // 1. Reboot with >15s past focus end -> stale sound/notification suppressed
+      assertTrue(
+        bootRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      clock.advance(26 * 60_000L)
+      val staleNotifications = bootRepo.handleSystemTimeOrBootReschedule(isReboot = true)
+      assertTrue(staleNotifications.isEmpty())
+      bootRepo.discardCurrentSession()
+
+      // 2. Reboot with <=15s past goal -> emits silent BootLateNotification & marks goalNotified
+      assertTrue(
+        bootRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.STOPWATCH,
+          goalMinutes = 5,
+        )
+      )
+      clock.advance(5 * 60_000L + 5_000L)
+      val recentNotifications = bootRepo.handleSystemTimeOrBootReschedule(isReboot = true)
+      assertEquals(1, recentNotifications.size)
+      assertEquals("Goal completed", recentNotifications.first().title)
+      assertTrue(db.timerDao().getActiveTimerStateOnce()!!.goalNotified)
+      bootRepo.discardCurrentSession()
+
+      // 3. Time change (non-reboot) reschedules from monotonic elapsed remaining time
+      assertTrue(
+        bootRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      clock.elapsedMs += 10 * 60_000L
+      clock.wallMs += 3_600_000L // system clock jumped 1 hour ahead
+      bootRepo.handleSystemTimeOrBootReschedule(isReboot = false)
+      assertEquals(
+        clock.wallMs + 15 * 60_000L,
+        syncedNormalTargets.last().single().triggerWallMs,
+      )
+    }
 
   @Test
   fun `analytics calculator computes Sat-Fri bars, delta percent, top-4 plus Others slices, and streak from real sessions`() {
@@ -310,7 +713,6 @@ class TimerRobolectricTest {
         makeSession("s3", 3L, "English", yesterday, 60 * 60_000L),
         makeSession("s4", 4L, "Science", yesterday, 30 * 60_000L),
         makeSession("s5", 5L, "History", yesterday, 30 * 60_000L),
-        // Last week session: 2h 45m -> current week 5h 30m = +100%
         makeSession("s-prev", 1L, "Mathematics", lastWeekWed, 165 * 60_000L),
       )
 
@@ -322,181 +724,20 @@ class TimerRobolectricTest {
         zoneId = zone,
       )
 
-    assertEquals(210 * 60_000L, result.todayTotalMs) // 3h 30m today
-    assertEquals(330 * 60_000L, result.periodTotalMs) // 5h 30m this week
+    assertEquals(210 * 60_000L, result.todayTotalMs)
+    assertEquals(330 * 60_000L, result.periodTotalMs)
     assertEquals(100, result.deltaPercent)
-    assertEquals(2, result.currentStreakDays) // Today + yesterday
+    assertEquals(2, result.currentStreakDays)
     assertEquals(7, result.bars.size)
     assertEquals("Sat", result.bars.first().label)
     assertEquals("Fri", result.bars.last().label)
     assertTrue(result.bars.first { it.label == "Wed" }.isHighest)
 
-    // 5 books -> top 4 + Others
     assertEquals(5, result.bookSlices.size)
     assertEquals("Mathematics", result.bookSlices[0].bookName)
     assertEquals("Others", result.bookSlices[4].bookName)
     assertEquals(30 * 60_000L, result.bookSlices[4].totalMs)
   }
-
-  @Test
-  fun `pomodoro fires focus end and break end mini alarms once per cycle and skipBreak suppresses break end`() =
-    runTest {
-      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Math"))
-      val chapterId =
-        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Calculus", number = 1))
-
-      val firedAlerts = mutableListOf<TimerAlertType>()
-      val syncedAlarms = mutableListOf<Long?>()
-      val dedup = PrefsAlarmDeduplicator(context)
-      val alarmRepo =
-        TimerRepository(
-          timerDao = db.timerDao(),
-          syllabusDao = db.syllabusDao(),
-          runInTransaction = { block -> db.withTransaction { block() } },
-          clock = clock,
-          zoneId = ZoneId.of("UTC"),
-          onTimerAlert = { type, _, _ -> firedAlerts.add(type) },
-          alarmDeduplicator = dedup,
-          onSyncAlarm = { state ->
-            syncedAlarms.add(TimerAlarmScheduler.computeNextTriggerElapsedMs(state))
-          },
-        )
-
-      assertTrue(
-        alarmRepo.startSession(
-          bookId = bookId,
-          chapterId = chapterId,
-          mode = TimerMode.POMODORO,
-          focusMinutes = 25,
-          breakMinutes = 5,
-        )
-      )
-      assertEquals(clock.elapsedMs + 25 * 60_000L, syncedAlarms.last())
-
-      // Advance to Focus completion -> fires once even if checked multiple times
-      clock.advance(25 * 60_000L)
-      alarmRepo.advancePomodoroPhaseIfDue()
-      alarmRepo.advancePomodoroPhaseIfDue()
-      assertEquals(listOf(TimerAlertType.POMODORO_FOCUS_COMPLETE), firedAlerts)
-      assertEquals(clock.elapsedMs + 5 * 60_000L, syncedAlarms.last())
-
-      // Advance to Break completion -> fires once and advances to cycle 2
-      clock.advance(5 * 60_000L)
-      alarmRepo.advancePomodoroPhaseIfDue()
-      assertEquals(
-        listOf(TimerAlertType.POMODORO_FOCUS_COMPLETE, TimerAlertType.POMODORO_BREAK_COMPLETE),
-        firedAlerts,
-      )
-
-      // Reach cycle 2 focus end, then skip break -> cycle 2 break end never fires
-      clock.advance(25 * 60_000L)
-      alarmRepo.advancePomodoroPhaseIfDue()
-      assertEquals(3, firedAlerts.size)
-      alarmRepo.skipBreak()
-      clock.advance(5 * 60_000L)
-      alarmRepo.advancePomodoroPhaseIfDue()
-      // Cycle 3 focus not yet finished at +5m (only 5/25m elapsed), and skipped break 2 did NOT fire
-      assertEquals(3, firedAlerts.size)
-    }
-
-  @Test
-  fun `goal alarm fires once per session and pause cancels then resume schedules remaining time`() =
-    runTest {
-      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Chemistry"))
-      val chapterId =
-        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Acids", number = 1))
-
-      val firedAlerts = mutableListOf<TimerAlertType>()
-      val scheduledTriggers = mutableListOf<Long?>()
-      val alarmRepo =
-        TimerRepository(
-          timerDao = db.timerDao(),
-          syllabusDao = db.syllabusDao(),
-          runInTransaction = { block -> db.withTransaction { block() } },
-          clock = clock,
-          zoneId = ZoneId.of("UTC"),
-          onTimerAlert = { type, _, _ -> firedAlerts.add(type) },
-          onSyncAlarm = { state ->
-            scheduledTriggers.add(TimerAlarmScheduler.computeNextTriggerElapsedMs(state))
-          },
-        )
-
-      assertTrue(
-        alarmRepo.startSession(
-          bookId = bookId,
-          chapterId = chapterId,
-          mode = TimerMode.STOPWATCH,
-          goalMinutes = 10,
-        )
-      )
-      assertEquals(clock.elapsedMs + 10 * 60_000L, scheduledTriggers.last())
-
-      // Pause after 4 minutes -> cancels alarm while paused
-      clock.advance(4 * 60_000L)
-      alarmRepo.pauseSession()
-      assertNull(scheduledTriggers.last())
-
-      // Stay paused for 20 minutes -> no goal alarm
-      clock.advance(20 * 60_000L)
-      alarmRepo.checkAndMarkGoalAlertIfReached()
-      assertTrue(firedAlerts.isEmpty())
-
-      // Resume -> trigger must be nowElapsed + remaining 6 minutes
-      alarmRepo.resumeSession()
-      assertEquals(clock.elapsedMs + 6 * 60_000L, scheduledTriggers.last())
-
-      // Advance 6 minutes -> Goal alarm fires once; subsequent checks never duplicate
-      clock.advance(6 * 60_000L)
-      alarmRepo.checkAndMarkGoalAlertIfReached()
-      alarmRepo.checkAndMarkGoalAlertIfReached()
-      assertEquals(listOf(TimerAlertType.GOAL_REACHED), firedAlerts)
-      assertNull(scheduledTriggers.last())
-    }
-
-  @Test
-  fun `crash recovery cancels stale alarms and suppresses goal or phase alerts already passed`() =
-    runTest {
-      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Physics"))
-      val chapterId =
-        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Motion", number = 1))
-
-      val firedAlerts = mutableListOf<TimerAlertType>()
-      val scheduledTriggers = mutableListOf<Long?>()
-
-      assertTrue(
-        repo.startSession(
-          bookId = bookId,
-          chapterId = chapterId,
-          mode = TimerMode.STOPWATCH,
-          goalMinutes = 5,
-        )
-      )
-      // Simulate process running 6m (past 5m goal) and dying before goal alert ran cleanly
-      clock.advance(6 * 60_000L)
-      repo.touchLastKnownWallTime()
-
-      val recoveredRepo =
-        TimerRepository(
-          timerDao = db.timerDao(),
-          syllabusDao = db.syllabusDao(),
-          runInTransaction = { block -> db.withTransaction { block() } },
-          clock = clock,
-          zoneId = ZoneId.of("UTC"),
-          onTimerAlert = { type, _, _ -> firedAlerts.add(type) },
-          onSyncAlarm = { state ->
-            scheduledTriggers.add(TimerAlarmScheduler.computeNextTriggerElapsedMs(state))
-          },
-        )
-
-      recoveredRepo.checkUnfinishedSessionOnLaunch()
-      assertNotNull(recoveredRepo.recoveryPrompt.first())
-      assertNull(scheduledTriggers.last())
-
-      recoveredRepo.resumeRecoveredSession()
-      clock.advance(10_000L)
-      recoveredRepo.checkAndMarkGoalAlertIfReached()
-      assertTrue(firedAlerts.isEmpty())
-    }
 
   @Test
   fun `dnd interruption filter allows alarms only when policy permits alarms`() {
@@ -549,7 +790,6 @@ class TimerRobolectricTest {
       assertFalse(parsed.settings.timerAlarmEnabled)
       assertFalse(parsed.settings.timerVibrationEnabled)
 
-      // Legacy v1 JSON missing timerAlarmEnabled & timerVibrationEnabled must still validate & default true
       val legacyJson =
         """
         {
@@ -578,3 +818,4 @@ class TimerRobolectricTest {
       assertTrue(restoredPrefs.timerVibrationEnabled)
     }
 }
+

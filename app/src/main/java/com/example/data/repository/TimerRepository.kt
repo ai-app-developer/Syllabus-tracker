@@ -7,12 +7,15 @@ import com.example.data.local.dao.TimerDao
 import com.example.data.local.entity.ActiveTimerStateEntity
 import com.example.data.local.entity.ReadingSessionEntity
 import com.example.data.local.entity.SessionEventEntity
+import com.example.notifications.NotificationHelper
 import com.example.timer.ClockProvider
 import com.example.timer.ComputedTimerMetrics
 import com.example.timer.InMemoryAlarmDeduplicator
 import com.example.timer.SessionEventType
 import com.example.timer.SystemClockProvider
 import com.example.timer.TimerAlarmDeduplicator
+import com.example.timer.TimerAlarmEventType
+import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.timer.TimerStatus
@@ -28,11 +31,20 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-enum class TimerAlertType {
-  POMODORO_FOCUS_COMPLETE,
-  POMODORO_BREAK_COMPLETE,
-  GOAL_REACHED,
-}
+data class AlarmOutcome(
+  val eventType: TimerAlarmEventType,
+  val delayMs: Long,
+  val title: String,
+  val message: String,
+  val notificationId: Int,
+  val updatedState: ActiveTimerStateEntity,
+)
+
+data class BootLateNotification(
+  val title: String,
+  val message: String,
+  val notificationId: Int,
+)
 
 data class ActiveSessionMetadata(
   val state: ActiveTimerStateEntity,
@@ -63,10 +75,10 @@ class TimerRepository(
   private val zoneId: ZoneId = ZoneId.systemDefault(),
   private val onSyncService: () -> Unit = {},
   private val onStopService: () -> Unit = {},
-  private val onTimerAlert: (TimerAlertType, String, String) -> Unit = { _, _, _ -> },
   private val onSessionsChanged: suspend () -> Unit = {},
   private val alarmDeduplicator: TimerAlarmDeduplicator = InMemoryAlarmDeduplicator(),
   private val onSyncAlarm: (ActiveTimerStateEntity?) -> Unit = {},
+  private val onSyncWallAlarms: (ActiveTimerStateEntity?) -> Unit = onSyncAlarm,
 ) {
   private val mutex = Mutex()
 
@@ -111,7 +123,6 @@ class TimerRepository(
     mutex.withLock {
       if (sessionStartedInCurrentProcess) return
       val existing = timerDao.getActiveTimerStateOnce() ?: return
-      // Cancel any dangling pre-death/pre-reboot alarm until the user explicitly resumes.
       onSyncAlarm(null)
       val book = syllabusDao.getBookByIdOnce(existing.bookId)
       val chapters = syllabusDao.getAllChaptersOnce()
@@ -242,7 +253,7 @@ class TimerRepository(
         )
       }
       sessionStartedInCurrentProcess = true
-      onSyncAlarm(updated)
+      onSyncAlarm(null)
       onSyncService()
     }
   }
@@ -341,6 +352,28 @@ class TimerRepository(
     }
   }
 
+  suspend fun updateActiveGoal(goalMinutes: Int?) {
+    mutex.withLock {
+      val current = timerDao.getActiveTimerStateOnce() ?: return
+      val nowElapsed = clock.elapsedRealtime()
+      val nowWall = clock.currentTimeMillis()
+      val metrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
+      val newGoalMs = goalMinutes?.takeIf { it > 0 }?.let { it * 60_000L }
+      val alreadyReached = newGoalMs != null && metrics.activeFocusMs >= newGoalMs
+      if (!alreadyReached) {
+        alarmDeduplicator.clearEvent("GOAL", current.sessionId)
+      }
+      val updated =
+        current.copy(
+          goalMs = newGoalMs,
+          goalNotified = alreadyReached,
+          lastKnownWallTimeMs = nowWall,
+        )
+      timerDao.upsertActiveTimerState(updated)
+      onSyncAlarm(updated)
+    }
+  }
+
   suspend fun requestStopSummary() {
     mutex.withLock {
       val current = timerDao.getActiveTimerStateOnce() ?: return
@@ -364,7 +397,7 @@ class TimerRepository(
 
       timerDao.upsertActiveTimerState(updated)
       sessionStartedInCurrentProcess = true
-      onSyncAlarm(updated)
+      onSyncAlarm(null)
       onSyncService()
     }
   }
@@ -381,17 +414,15 @@ class TimerRepository(
       val metrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
       val notesToSave = (finalNotes ?: current.notes).trim()
 
-      val inserted =
-        persistSessionAndCleanupLocked(
-          state = current,
-          endWallTimeMs = nowWall,
-          activeFocusMs = metrics.activeFocusMs,
-          pauseMs = metrics.pauseMs,
-          breakMs = metrics.breakMs,
-          notes = notesToSave,
-          nowElapsedMs = metrics.activeFocusMs,
-        )
-      inserted
+      persistSessionAndCleanupLocked(
+        state = current,
+        endWallTimeMs = nowWall,
+        activeFocusMs = metrics.activeFocusMs,
+        pauseMs = metrics.pauseMs,
+        breakMs = metrics.breakMs,
+        notes = notesToSave,
+        nowElapsedMs = metrics.activeFocusMs,
+      )
     }
   }
 
@@ -449,95 +480,279 @@ class TimerRepository(
     }
   }
 
-  suspend fun advancePomodoroPhaseIfDue() {
-    mutex.withLock {
-      val current = timerDao.getActiveTimerStateOnce() ?: return
-      if (current.mode != TimerMode.POMODORO) return
+  /**
+   * Called strictly by TimerAlarmReceiver when AlarmManager fires a scheduled alarm.
+   * Validates active state, prevents duplicates, performs one Room write/transition,
+   * and chains the next phase alarm immediately.
+   */
+  suspend fun handleAlarmEvent(
+    eventType: TimerAlarmEventType,
+    sessionId: String,
+    expectedCycle: Int,
+    expectedTriggerWallMs: Long,
+  ): AlarmOutcome? {
+    return mutex.withLock {
+      val current = timerDao.getActiveTimerStateOnce() ?: return@withLock null
+      if (current.sessionId != sessionId) return@withLock null
+      if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) {
+        onSyncAlarm(null)
+        return@withLock null
+      }
+
       val nowElapsed = clock.elapsedRealtime()
       val nowWall = clock.currentTimeMillis()
-      val metrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
 
-      if (current.status == TimerStatus.RUNNING && current.focusDurationMs > 0L && metrics.currentPhaseRemainingMs == 0L) {
-        val updated =
-          current.copy(
-            status = TimerStatus.BREAK,
-            phaseStartElapsedMs = nowElapsed,
-            phaseStartWallTimeMs = nowWall,
-            accumulatedFocusMs = metrics.activeFocusMs,
-            lastKnownWallTimeMs = nowWall,
-          )
-        runInTransaction {
-          timerDao.upsertActiveTimerState(updated)
-          timerDao.insertEvent(
-            SessionEventEntity(
-              sessionId = current.sessionId,
-              bookId = current.bookId,
-              chapterId = current.chapterId,
-              eventType = SessionEventType.BREAK_START,
-              elapsedAtEventMs = metrics.activeFocusMs,
-              wallTimeMs = nowWall,
-              label = "Break",
+      if (nowWall < expectedTriggerWallMs - EARLY_TOLERANCE_MS) {
+        onSyncAlarm(current)
+        return@withLock null
+      }
+
+      val delayMs = (nowWall - expectedTriggerWallMs).coerceAtLeast(0L)
+
+      when (eventType) {
+        TimerAlarmEventType.FOCUS_END -> {
+          if (
+            current.mode != TimerMode.POMODORO ||
+              current.status != TimerStatus.RUNNING ||
+              current.pomodoroCycle != expectedCycle ||
+              current.focusDurationMs <= 0L
+          ) {
+            return@withLock null
+          }
+          val eventKey = "FOCUS_END:$expectedCycle"
+          if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+            return@withLock null
+          }
+
+          val newAccumulatedFocus = current.accumulatedFocusMs + current.focusDurationMs
+          val updated =
+            current.copy(
+              status = TimerStatus.BREAK,
+              phaseStartElapsedMs = nowElapsed,
+              phaseStartWallTimeMs = nowWall,
+              accumulatedFocusMs = newAccumulatedFocus,
+              lastKnownWallTimeMs = nowWall,
             )
+
+          runInTransaction {
+            timerDao.upsertActiveTimerState(updated)
+            timerDao.insertEvent(
+              SessionEventEntity(
+                sessionId = current.sessionId,
+                bookId = current.bookId,
+                chapterId = current.chapterId,
+                eventType = SessionEventType.BREAK_START,
+                elapsedAtEventMs = newAccumulatedFocus,
+                wallTimeMs = nowWall,
+                label = "Break",
+              )
+            )
+          }
+
+          onSyncAlarm(updated)
+          val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
+          val breakMins = (current.breakDurationMs / 60_000L).coerceAtLeast(1L)
+          AlarmOutcome(
+            eventType = eventType,
+            delayMs = delayMs,
+            title = "Break started",
+            message = "$bookName • Time for a $breakMins min break.",
+            notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID,
+            updatedState = updated,
           )
         }
-        val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-        val breakMins = (current.breakDurationMs / 60_000L).coerceAtLeast(1L)
-        onSyncAlarm(updated)
-        emitAlertOnce(
-          sessionId = current.sessionId,
-          eventKey = "FOCUS_END:${current.pomodoroCycle}",
-          type = TimerAlertType.POMODORO_FOCUS_COMPLETE,
-          title = "Focus complete — $bookName",
-          message = "Time for a $breakMins min break.",
-        )
-        onSyncService()
-      } else if (current.status == TimerStatus.BREAK && current.breakDurationMs > 0L && metrics.currentPhaseRemainingMs == 0L) {
-        val updated =
-          current.copy(
-            status = TimerStatus.RUNNING,
-            phaseStartElapsedMs = nowElapsed,
-            phaseStartWallTimeMs = nowWall,
-            accumulatedBreakMs = metrics.breakMs,
-            lastKnownWallTimeMs = nowWall,
-            pomodoroCycle = current.pomodoroCycle + 1,
+
+        TimerAlarmEventType.BREAK_END -> {
+          if (
+            current.mode != TimerMode.POMODORO ||
+              current.status != TimerStatus.BREAK ||
+              current.pomodoroCycle != expectedCycle ||
+              current.breakDurationMs <= 0L
+          ) {
+            return@withLock null
+          }
+          val eventKey = "BREAK_END:$expectedCycle"
+          if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+            return@withLock null
+          }
+
+          val newAccumulatedBreak = current.accumulatedBreakMs + current.breakDurationMs
+          val nextCycle = current.pomodoroCycle + 1
+          val updated =
+            current.copy(
+              status = TimerStatus.RUNNING,
+              phaseStartElapsedMs = nowElapsed,
+              phaseStartWallTimeMs = nowWall,
+              accumulatedBreakMs = newAccumulatedBreak,
+              lastKnownWallTimeMs = nowWall,
+              pomodoroCycle = nextCycle,
+            )
+
+          timerDao.upsertActiveTimerState(updated)
+          onSyncAlarm(updated)
+          val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
+          AlarmOutcome(
+            eventType = eventType,
+            delayMs = delayMs,
+            title = "Break over, back to focus",
+            message = "$bookName • Cycle $nextCycle focus started.",
+            notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID,
+            updatedState = updated,
           )
-        timerDao.upsertActiveTimerState(updated)
-        val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-        onSyncAlarm(updated)
-        emitAlertOnce(
-          sessionId = current.sessionId,
-          eventKey = "BREAK_END:${current.pomodoroCycle}",
-          type = TimerAlertType.POMODORO_BREAK_COMPLETE,
-          title = "Break complete — $bookName",
-          message = "Cycle ${current.pomodoroCycle + 1} focus started.",
-        )
-        onSyncService()
+        }
+
+        TimerAlarmEventType.GOAL_REACHED -> {
+          val goalMs = current.goalMs ?: return@withLock null
+          if (current.goalNotified || current.status != TimerStatus.RUNNING) {
+            return@withLock null
+          }
+          if (!alarmDeduplicator.tryAcquire("GOAL", current.sessionId)) {
+            return@withLock null
+          }
+
+          val updated = current.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
+          timerDao.upsertActiveTimerState(updated)
+          onSyncAlarm(updated)
+          val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
+          AlarmOutcome(
+            eventType = eventType,
+            delayMs = delayMs,
+            title = "Goal completed",
+            message = "$bookName • You reached your ${TimerMath.formatGoalWords(goalMs)} study goal.",
+            notificationId = NotificationHelper.TIMER_ALERT_GOAL_NOTIFICATION_ID,
+            updatedState = updated,
+          )
+        }
       }
     }
   }
 
-  suspend fun checkAndMarkGoalAlertIfReached() {
-    mutex.withLock {
-      val current = timerDao.getActiveTimerStateOnce() ?: return
-      val goalMs = current.goalMs ?: return
-      if (current.goalNotified || current.status != TimerStatus.RUNNING) return
-
-      val nowElapsed = clock.elapsedRealtime()
-      val nowWall = clock.currentTimeMillis()
-      val metrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
-      if (metrics.activeFocusMs >= goalMs) {
-        val updated = current.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
-        timerDao.upsertActiveTimerState(updated)
-        onSyncAlarm(updated)
-        val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-        emitAlertOnce(
-          sessionId = current.sessionId,
-          eventKey = "GOAL",
-          type = TimerAlertType.GOAL_REACHED,
-          title = "Session goal reached!",
-          message = "You completed your ${TimerMath.formatGoalWords(goalMs)} goal for $bookName.",
-        )
+  /**
+   * Reschedules alarms on BOOT_COMPLETED / MY_PACKAGE_REPLACED / TIME_SET / TIMEZONE_CHANGED.
+   * Returns optional silent notifications for events that passed within the last 15 seconds.
+   */
+  suspend fun handleSystemTimeOrBootReschedule(isReboot: Boolean): List<BootLateNotification> {
+    return mutex.withLock {
+      val current = timerDao.getActiveTimerStateOnce()
+      if (current == null) {
+        onSyncAlarm(null)
+        return@withLock emptyList()
       }
+      if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) {
+        onSyncAlarm(null)
+        return@withLock emptyList()
+      }
+
+      if (!isReboot) {
+        onSyncAlarm(current)
+        return@withLock emptyList()
+      }
+
+      val nowWall = clock.currentTimeMillis()
+      val nowElapsed = clock.elapsedRealtime()
+      val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
+      val lateNotifications = ArrayList<BootLateNotification>()
+      var workingState: ActiveTimerStateEntity = current
+
+      val targets =
+        TimerAlarmScheduler.computeScheduledTargets(
+          state = workingState,
+          nowElapsedMs = nowElapsed,
+          nowWallMs = nowWall,
+          fromStoredWallTimesOnly = true,
+        )
+
+      for (target in targets) {
+        if (target.triggerWallMs <= nowWall) {
+          val lateMs = nowWall - target.triggerWallMs
+          when (target.eventType) {
+            TimerAlarmEventType.GOAL_REACHED -> {
+              alarmDeduplicator.markSuppressed("GOAL", workingState.sessionId)
+              workingState = workingState.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
+              timerDao.upsertActiveTimerState(workingState)
+              if (lateMs <= TimerAlarmScheduler.LATE_THRESHOLD_MS) {
+                val goalMs = workingState.goalMs ?: 0L
+                lateNotifications.add(
+                  BootLateNotification(
+                    title = "Goal completed",
+                    message = "$bookName • You reached your ${TimerMath.formatGoalWords(goalMs)} study goal.",
+                    notificationId = NotificationHelper.TIMER_ALERT_GOAL_NOTIFICATION_ID,
+                  )
+                )
+              }
+            }
+            TimerAlarmEventType.FOCUS_END -> {
+              alarmDeduplicator.markSuppressed(
+                "FOCUS_END:${workingState.pomodoroCycle}",
+                workingState.sessionId,
+              )
+              if (lateMs <= TimerAlarmScheduler.LATE_THRESHOLD_MS) {
+                val breakMins = (workingState.breakDurationMs / 60_000L).coerceAtLeast(1L)
+                workingState =
+                  workingState.copy(
+                    status = TimerStatus.BREAK,
+                    phaseStartElapsedMs = (nowElapsed - lateMs).coerceAtLeast(0L),
+                    phaseStartWallTimeMs = target.triggerWallMs,
+                    accumulatedFocusMs =
+                      workingState.accumulatedFocusMs + workingState.focusDurationMs,
+                    lastKnownWallTimeMs = nowWall,
+                  )
+                timerDao.upsertActiveTimerState(workingState)
+                lateNotifications.add(
+                  BootLateNotification(
+                    title = "Break started",
+                    message = "$bookName • Time for a $breakMins min break.",
+                    notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID,
+                  )
+                )
+              }
+            }
+            TimerAlarmEventType.BREAK_END -> {
+              alarmDeduplicator.markSuppressed(
+                "BREAK_END:${workingState.pomodoroCycle}",
+                workingState.sessionId,
+              )
+              if (lateMs <= TimerAlarmScheduler.LATE_THRESHOLD_MS) {
+                val nextCycle = workingState.pomodoroCycle + 1
+                workingState =
+                  workingState.copy(
+                    status = TimerStatus.RUNNING,
+                    phaseStartElapsedMs = (nowElapsed - lateMs).coerceAtLeast(0L),
+                    phaseStartWallTimeMs = target.triggerWallMs,
+                    accumulatedBreakMs =
+                      workingState.accumulatedBreakMs + workingState.breakDurationMs,
+                    lastKnownWallTimeMs = nowWall,
+                    pomodoroCycle = nextCycle,
+                  )
+                timerDao.upsertActiveTimerState(workingState)
+                lateNotifications.add(
+                  BootLateNotification(
+                    title = "Break over, back to focus",
+                    message = "$bookName • Cycle $nextCycle focus started.",
+                    notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID,
+                  )
+                )
+              }
+            }
+          }
+        }
+      }
+
+      val futureTargets =
+        TimerAlarmScheduler.computeScheduledTargets(
+          state = workingState,
+          nowElapsedMs = nowElapsed,
+          nowWallMs = nowWall,
+          fromStoredWallTimesOnly = true,
+        ).filter { it.triggerWallMs > nowWall }
+
+      if (futureTargets.isNotEmpty()) {
+        onSyncWallAlarms(workingState)
+      } else {
+        onSyncAlarm(null)
+      }
+
+      lateNotifications
     }
   }
 
@@ -731,19 +946,8 @@ class TimerRepository(
     return insertedAny
   }
 
-  private fun emitAlertOnce(
-    sessionId: String,
-    eventKey: String,
-    type: TimerAlertType,
-    title: String,
-    message: String,
-  ) {
-    if (alarmDeduplicator.tryAcquire(eventKey = eventKey, sessionId = sessionId)) {
-      onTimerAlert(type, title, message)
-    }
-  }
-
   companion object {
     private const val TAG = "TimerRepository"
+    private const val EARLY_TOLERANCE_MS = 1500L
   }
 }

@@ -12,13 +12,14 @@ import kotlinx.coroutines.withContext
 class BootCompletedReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
     val action = intent.action ?: return
-    if (
-      action == Intent.ACTION_BOOT_COMPLETED ||
-        action == Intent.ACTION_MY_PACKAGE_REPLACED ||
-        action == Intent.ACTION_DATE_CHANGED ||
+    val isRebootOrUpdate =
+      action == Intent.ACTION_BOOT_COMPLETED || action == Intent.ACTION_MY_PACKAGE_REPLACED
+    val isTimeOrDateChange =
+      action == Intent.ACTION_DATE_CHANGED ||
         action == Intent.ACTION_TIME_CHANGED ||
         action == Intent.ACTION_TIMEZONE_CHANGED
-    ) {
+
+    if (isRebootOrUpdate || isTimeOrDateChange) {
       val pendingResult: PendingResult? = goAsync()
       val app = context.applicationContext as SyllabusApplication
       app.applicationScope.launch {
@@ -30,6 +31,17 @@ class BootCompletedReceiver : BroadcastReceiver() {
                 context = app,
                 hour = prefs.reminderHour,
                 minute = prefs.reminderMinute,
+              )
+            }
+            val lateNotifications =
+              app.timerRepository.handleSystemTimeOrBootReschedule(isReboot = isRebootOrUpdate)
+            for (item in lateNotifications) {
+              NotificationHelper.showTimerAlert(
+                context = app,
+                title = item.title,
+                message = item.message,
+                notificationId = item.notificationId,
+                silent = true,
               )
             }
           }

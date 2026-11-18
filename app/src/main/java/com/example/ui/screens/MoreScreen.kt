@@ -1,12 +1,15 @@
 package com.example.ui.screens
 
 import android.Manifest
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.History
@@ -45,6 +49,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,9 +63,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.preferences.UserPreferences
 import com.example.notifications.NotificationHelper
+import com.example.timer.TimerAlarmScheduler
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.ErrorRed
@@ -92,8 +101,23 @@ fun MoreScreen(
   onImportBackupUri: (Uri) -> Unit,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   var hasPermission by remember {
     mutableStateOf(NotificationHelper.hasNotificationPermission(context))
+  }
+  var canScheduleExactAlarms by remember {
+    mutableStateOf(TimerAlarmScheduler.canScheduleExactAlarms(context))
+  }
+
+  DisposableEffect(lifecycleOwner, context) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        hasPermission = NotificationHelper.hasNotificationPermission(context)
+        canScheduleExactAlarms = TimerAlarmScheduler.canScheduleExactAlarms(context)
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 
   val permissionLauncher =
@@ -461,6 +485,32 @@ fun MoreScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
               )
+              if (!canScheduleExactAlarms) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                  text = "Exact alarm not allowed, alarm may be delayed.",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = ErrorRed,
+                  modifier =
+                    Modifier.clickable {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                          val pkgUri = Uri.parse("package:${context.packageName}")
+                          runCatching {
+                            context.startActivity(
+                              Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, pkgUri)
+                            )
+                          }.onFailure {
+                            runCatching {
+                              context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
+                              )
+                            }
+                          }
+                        }
+                      }
+                      .testTag("more_exact_alarm_warning"),
+                )
+              }
             }
             Switch(
               checked = preferences.timerAlarmEnabled,
@@ -523,6 +573,71 @@ fun MoreScreen(
                 ),
               modifier = Modifier.testTag("more_timer_vibration_switch"),
             )
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
+          Surface(
+            onClick = {
+              val pkgUri = Uri.parse("package:${context.packageName}")
+              runCatching {
+                context.startActivity(
+                  Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, pkgUri)
+                )
+              }.onFailure {
+                runCatching {
+                  context.startActivity(
+                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                  )
+                }.onFailure {
+                  runCatching {
+                    context.startActivity(
+                      Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkgUri)
+                    )
+                  }
+                }
+              }
+            },
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth().testTag("more_battery_optimization_row"),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LightIndigoTint),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Outlined.BatteryChargingFull,
+                  contentDescription = null,
+                  tint = PrimaryIndigo,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(14.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Battery optimization",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Text(
+                  text = "Set Battery to Unrestricted, enable Autostart, lock the app in Recent apps",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Open battery optimization settings",
+                tint = TextSecondary,
+              )
+            }
           }
 
           HorizontalDivider(thickness = 1.dp, color = HairlineBorder)

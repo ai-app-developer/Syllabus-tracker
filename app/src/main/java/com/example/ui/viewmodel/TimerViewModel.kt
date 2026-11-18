@@ -220,21 +220,6 @@ class TimerViewModel(application: Application) : AndroidViewModel(application) {
       } else {
         val nowWall = System.currentTimeMillis()
         val metrics = TimerMath.computeMetrics(meta.state, nowElapsed, nowWall)
-        if (meta.state.mode == TimerMode.POMODORO && metrics.currentPhaseRemainingMs == 0L) {
-          app.applicationScope.launch(Dispatchers.IO) {
-            timerRepo.advancePomodoroPhaseIfDue()
-          }
-        }
-        if (
-          !meta.state.goalNotified &&
-            meta.state.status == TimerStatus.RUNNING &&
-            meta.state.goalMs != null &&
-            metrics.activeFocusMs >= meta.state.goalMs
-        ) {
-          app.applicationScope.launch(Dispatchers.IO) {
-            timerRepo.checkAndMarkGoalAlertIfReached()
-          }
-        }
         LiveStudyingUiState(
           activeMeta = meta,
           metrics = metrics,

@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.room.withTransaction
 import com.example.data.local.SyllabusDatabase
@@ -19,6 +20,7 @@ import com.example.timer.TimerAlarmPlayer
 import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerForegroundService
 import com.example.widgets.WidgetUpdater
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,7 +28,11 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 class SyllabusApplication : Application() {
-  val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+  private val appExceptionHandler =
+    CoroutineExceptionHandler { _, throwable ->
+      Log.w("SyllabusApplication", "Uncaught background coroutine error", throwable)
+    }
+  val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + appExceptionHandler)
 
   val database: SyllabusDatabase by lazy { SyllabusDatabase.getInstance(this) }
   val preferencesRepository: UserPreferencesRepository by lazy { UserPreferencesRepository(this) }
@@ -49,23 +55,16 @@ class SyllabusApplication : Application() {
         TimerAlarmPlayer.stopAll()
         TimerForegroundService.stop(this@SyllabusApplication)
       },
-      onTimerAlert = { _, title, message ->
-        val prefs = preferencesRepository.getCachedPreferencesSnapshot()
-        TimerAlarmPlayer.playMiniAlarm(
-          context = this@SyllabusApplication,
-          playSound = prefs.timerAlarmEnabled,
-          playVibration = prefs.timerVibrationEnabled,
-        )
-        NotificationHelper.showTimerAlert(
-          context = this@SyllabusApplication,
-          title = title,
-          message = message,
-          silent = true,
-        )
-      },
       alarmDeduplicator = PrefsAlarmDeduplicator(this@SyllabusApplication),
       onSyncAlarm = { activeState ->
-        TimerAlarmScheduler.syncAlarm(this@SyllabusApplication, activeState)
+        TimerAlarmScheduler.syncAlarms(this@SyllabusApplication, activeState)
+      },
+      onSyncWallAlarms = { activeState ->
+        TimerAlarmScheduler.syncAlarms(
+          context = this@SyllabusApplication,
+          state = activeState,
+          fromStoredWallTimesOnly = true,
+        )
       },
     )
   }
@@ -87,8 +86,12 @@ class SyllabusApplication : Application() {
     object : BroadcastReceiver() {
       override fun onReceive(context: Context, intent: Intent) {
         val pendingResult: PendingResult? = goAsync()
+        val action = intent.action
         applicationScope.launch {
           try {
+            if (action == Intent.ACTION_TIME_CHANGED || action == Intent.ACTION_TIMEZONE_CHANGED) {
+              timerRepository.handleSystemTimeOrBootReschedule(isReboot = false)
+            }
             WidgetUpdater.updateNow(this@SyllabusApplication, force = true)
           } finally {
             pendingResult?.finish()

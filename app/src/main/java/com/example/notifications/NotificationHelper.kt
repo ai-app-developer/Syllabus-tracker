@@ -8,6 +8,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -24,11 +26,12 @@ import com.example.timer.TimerStatus
 object NotificationHelper {
   const val CHANNEL_ID = "syllabus_study_reminders"
   const val TIMER_ONGOING_CHANNEL_ID = "syllabus_timer_ongoing"
-  const val TIMER_ALERTS_CHANNEL_ID = "syllabus_timer_alerts"
+  const val TIMER_ALARM_CHANNEL_ID = "timer_alarm"
 
   private const val NOTIFICATION_ID = 1001
   const val TIMER_ONGOING_NOTIFICATION_ID = 2001
-  private const val TIMER_ALERT_NOTIFICATION_ID = 2002
+  const val TIMER_ALERT_PHASE_NOTIFICATION_ID = 2010
+  const val TIMER_ALERT_GOAL_NOTIFICATION_ID = 2011
 
   const val EXTRA_TIMER_ACTION = "extra_timer_action"
   const val TIMER_ACTION_OPEN_STUDYING = "com.example.action.OPEN_STUDYING"
@@ -64,17 +67,28 @@ object NotificationHelper {
       manager.createNotificationChannel(timerChannel)
     }
 
-    if (manager.getNotificationChannel(TIMER_ALERTS_CHANNEL_ID) == null) {
-      val alertsChannel =
+    if (manager.getNotificationChannel(TIMER_ALARM_CHANNEL_ID) == null) {
+      val alarmSoundUri =
+        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+          ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+      val alarmAudioAttrs =
+        AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_ALARM)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+          .build()
+      val alarmChannel =
         NotificationChannel(
-            TIMER_ALERTS_CHANNEL_ID,
+            TIMER_ALARM_CHANNEL_ID,
             context.getString(R.string.timer_alerts_channel_name),
             NotificationManager.IMPORTANCE_HIGH,
           )
           .apply {
             description = context.getString(R.string.timer_alerts_channel_desc)
+            setSound(alarmSoundUri, alarmAudioAttrs)
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0L, 400L)
           }
-      manager.createNotificationChannel(alertsChannel)
+      manager.createNotificationChannel(alarmChannel)
     }
   }
 
@@ -242,6 +256,7 @@ object NotificationHelper {
     context: Context,
     title: String,
     message: String,
+    notificationId: Int = TIMER_ALERT_PHASE_NOTIFICATION_ID,
     silent: Boolean = false,
   ) {
     if (!hasNotificationPermission(context)) return
@@ -255,23 +270,25 @@ object NotificationHelper {
     val contentPendingIntent =
       PendingIntent.getActivity(
         context,
-        204,
+        notificationId,
         openStudyingIntent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
 
     val notification =
-      NotificationCompat.Builder(context, TIMER_ALERTS_CHANNEL_ID)
+      NotificationCompat.Builder(context, TIMER_ALARM_CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_notification_book)
         .setContentTitle(title)
         .setContentText(message)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+        .setCategory(NotificationCompat.CATEGORY_ALARM)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
         .setContentIntent(contentPendingIntent)
         .setSilent(silent)
         .setAutoCancel(true)
         .build()
 
-    NotificationManagerCompat.from(context).notify(TIMER_ALERT_NOTIFICATION_ID, notification)
+    NotificationManagerCompat.from(context).notify(notificationId, notification)
   }
 
   fun cancelOngoingTimerNotification(context: Context) {

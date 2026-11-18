@@ -5,24 +5,26 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.media.MediaPlayer
+import android.media.Ringtone
 import android.media.RingtoneManager
-import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
-import android.os.Handler
-import android.os.Looper
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.provider.Settings
 import android.util.Log
+import com.example.R
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 interface TimerAlarmDeduplicator {
   fun tryAcquire(eventKey: String, sessionId: String): Boolean
 
   fun markSuppressed(eventKey: String, sessionId: String)
+
+  fun clearEvent(eventKey: String, sessionId: String)
 
   fun clearSession(sessionId: String)
 }
@@ -48,6 +50,14 @@ class InMemoryAlarmDeduplicator : TimerAlarmDeduplicator {
         keys.clear()
       }
       keys.add(eventKey)
+    }
+  }
+
+  override fun clearEvent(eventKey: String, sessionId: String) {
+    synchronized(lock) {
+      if (activeSessionId == sessionId) {
+        keys.remove(eventKey)
+      }
     }
   }
 
@@ -82,6 +92,18 @@ class PrefsAlarmDeduplicator(context: Context) : TimerAlarmDeduplicator {
       val currentSet = loadKeysForSessionLocked(sessionId)
       if (currentSet.add(eventKey)) {
         saveKeysLocked(sessionId, currentSet)
+      }
+    }
+  }
+
+  override fun clearEvent(eventKey: String, sessionId: String) {
+    synchronized(lock) {
+      val storedSession = prefs.getString(KEY_SESSION_ID, null)
+      if (storedSession == sessionId) {
+        val currentSet = loadKeysForSessionLocked(sessionId)
+        if (currentSet.remove(eventKey)) {
+          saveKeysLocked(sessionId, currentSet)
+        }
       }
     }
   }
@@ -122,18 +144,17 @@ class PrefsAlarmDeduplicator(context: Context) : TimerAlarmDeduplicator {
 }
 
 object TimerAlarmPlayer {
-  private const val TAG = "TimerAlarmPlayer"
-  const val MINI_ALARM_DURATION_MS = 2800L
+  private const val TAG = "TimerAlarm"
+  const val MINI_ALARM_DURATION_MS = 3000L
   const val MINI_ALARM_VIBRATION_MS = 400L
 
-  private val mainHandler = Handler(Looper.getMainLooper())
+  private val stopExecutor = Executors.newSingleThreadScheduledExecutor()
   private val lock = Any()
 
-  private var activePlayer: MediaPlayer? = null
-  private var activeToneGenerator: ToneGenerator? = null
+  private var activeRingtone: Ringtone? = null
   private var activeAudioManager: AudioManager? = null
   private var activeFocusRequest: AudioFocusRequest? = null
-  private var pendingStopRunnable: Runnable? = null
+  private var pendingStopFuture: ScheduledFuture<*>? = null
 
   private val alarmAudioAttributes: AudioAttributes by lazy {
     AudioAttributes.Builder()
@@ -167,26 +188,33 @@ object TimerAlarmPlayer {
     }
   }
 
+  /**
+   * Plays a short 3s Ringtone (USAGE_ALARM) and/or 400ms one-shot vibration.
+   * Returns true if Ringtone audio started successfully.
+   */
   fun playMiniAlarm(
     context: Context,
     playSound: Boolean,
     playVibration: Boolean,
-  ) {
-    if (!playSound && !playVibration) return
+  ): Boolean {
+    if (!playSound && !playVibration) return false
 
     val appContext = context.applicationContext
     val notificationManager =
       appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
     if (isBlockedByDoNotDisturb(notificationManager)) {
       Log.d(TAG, "Mini alarm suppressed by Do Not Disturb")
-      return
+      return false
     }
 
     if (playVibration) {
       triggerShortVibration(appContext)
     }
-    if (playSound) {
-      triggerShortSound(appContext)
+
+    return if (playSound) {
+      triggerShortRingtone(appContext)
+    } else {
+      false
     }
   }
 
@@ -230,7 +258,7 @@ object TimerAlarmPlayer {
     }
   }
 
-  private fun triggerShortSound(context: Context) {
+  private fun triggerShortRingtone(context: Context): Boolean {
     synchronized(lock) {
       cleanupLocked()
 
@@ -243,100 +271,70 @@ object TimerAlarmPlayer {
           .build()
 
       if (audioManager != null) {
-        runCatching {
-          audioManager.requestAudioFocus(focusRequest)
-        }
+        runCatching { audioManager.requestAudioFocus(focusRequest) }
         activeAudioManager = audioManager
         activeFocusRequest = focusRequest
       }
 
-      val soundUri = resolveGentleAlarmUri()
-      val startedMedia =
-        if (soundUri != null) {
-          startMediaPlayerLocked(context, soundUri)
-        } else {
-          false
+      val candidates = resolveCandidateUris(context)
+      var startedRingtone: Ringtone? = null
+      for (uri in candidates) {
+        val played =
+          runCatching {
+            val ringtone = RingtoneManager.getRingtone(context, uri) ?: return@runCatching null
+            ringtone.audioAttributes = alarmAudioAttributes
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+              ringtone.isLooping = false
+            }
+            ringtone.play()
+            ringtone
+          }.getOrNull()
+        if (played != null) {
+          startedRingtone = played
+          break
         }
-
-      if (!startedMedia) {
-        startFallbackToneLocked()
       }
 
-      val stopTask = Runnable {
-        synchronized(lock) {
-          cleanupLocked()
-        }
+      if (startedRingtone == null) {
+        cleanupLocked()
+        return false
       }
-      pendingStopRunnable = stopTask
-      mainHandler.postDelayed(stopTask, MINI_ALARM_DURATION_MS)
+
+      activeRingtone = startedRingtone
+      pendingStopFuture =
+        stopExecutor.schedule(
+          {
+            synchronized(lock) {
+              cleanupLocked()
+            }
+          },
+          MINI_ALARM_DURATION_MS,
+          TimeUnit.MILLISECONDS,
+        )
+      return true
     }
   }
 
-  private fun startMediaPlayerLocked(context: Context, uri: Uri): Boolean {
-    return runCatching {
-      val player = MediaPlayer()
-      player.setAudioAttributes(alarmAudioAttributes)
-      player.isLooping = false
-      player.setDataSource(context, uri)
-      player.setOnCompletionListener {
-        synchronized(lock) {
-          cleanupLocked()
-        }
-      }
-      player.setOnErrorListener { _, _, _ ->
-        synchronized(lock) {
-          cleanupLocked()
-        }
-        true
-      }
-      player.prepare()
-      player.start()
-      activePlayer = player
-      true
-    }.getOrElse { err ->
-      Log.w(TAG, "MediaPlayer failed for $uri, using short fallback tone", err)
-      false
+  private fun resolveCandidateUris(context: Context): List<Uri> {
+    val list = ArrayList<Uri>(3)
+    runCatching { RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) }.getOrNull()?.let {
+      list.add(it)
     }
-  }
-
-  private fun startFallbackToneLocked() {
-    runCatching {
-      val generator = ToneGenerator(AudioManager.STREAM_ALARM, 75)
-      generator.startTone(ToneGenerator.TONE_PROP_BEEP2, 350)
-      activeToneGenerator = generator
-    }.onFailure { err ->
-      Log.w(TAG, "Fallback ToneGenerator failed", err)
+    runCatching { RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) }.getOrNull()?.let {
+      list.add(it)
     }
-  }
-
-  private fun resolveGentleAlarmUri(): Uri? {
-    return runCatching {
-      RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-        ?: Settings.System.DEFAULT_NOTIFICATION_URI
-    }.getOrNull()
+    list.add(Uri.parse("android.resource://${context.packageName}/${R.raw.timer_alarm_beep}"))
+    return list
   }
 
   private fun cleanupLocked() {
-    pendingStopRunnable?.let { mainHandler.removeCallbacks(it) }
-    pendingStopRunnable = null
+    pendingStopFuture?.cancel(false)
+    pendingStopFuture = null
 
-    activePlayer?.let { player ->
-      runCatching {
-        if (player.isPlaying) {
-          player.stop()
-        }
-      }
-      runCatching { player.reset() }
-      runCatching { player.release() }
+    activeRingtone?.let { ringtone ->
+      runCatching { ringtone.stop() }
     }
-    activePlayer = null
-
-    activeToneGenerator?.let { generator ->
-      runCatching { generator.stopTone() }
-      runCatching { generator.release() }
-    }
-    activeToneGenerator = null
+    activeRingtone = null
 
     val am = activeAudioManager
     val req = activeFocusRequest
