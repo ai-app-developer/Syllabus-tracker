@@ -1,6 +1,8 @@
 package com.example.data.local.dao
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Dao
+import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -11,6 +13,7 @@ import kotlinx.coroutines.flow.Flow
 
 import kotlin.math.roundToInt
 
+@Immutable
 data class WidgetSummaryRow(
   val totalBooks: Int,
   val totalChapters: Int,
@@ -29,6 +32,24 @@ data class WidgetSummaryRow(
     get() = if (totalChapters == 0) 0 else ((completedChapters * 100f) / totalChapters).roundToInt()
 }
 
+@Immutable
+data class BookProgressRow(
+  @Embedded val book: BookEntity,
+  val totalChapters: Int,
+  val completedChapters: Int,
+  val nextChapterId: Long?,
+  val nextChapterName: String?,
+  val nextChapterNumber: Int?,
+)
+
+@Immutable
+data class OverallProgressRow(
+  val totalBooks: Int,
+  val totalChapters: Int,
+  val completedChapters: Int,
+  val completedToday: Int,
+)
+
 @Dao
 interface SyllabusDao {
   @Query("SELECT * FROM books ORDER BY createdAt DESC, id DESC")
@@ -43,11 +64,62 @@ interface SyllabusDao {
   @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY number ASC, id ASC")
   fun observeChaptersForBook(bookId: Long): Flow<List<ChapterEntity>>
 
+  @Query(
+    """
+    SELECT
+      b.*,
+      COALESCE((SELECT COUNT(*) FROM chapters c WHERE c.bookId = b.id), 0) AS totalChapters,
+      COALESCE((SELECT SUM(CASE WHEN c.isCompleted = 1 THEN 1 ELSE 0 END) FROM chapters c WHERE c.bookId = b.id), 0) AS completedChapters,
+      (SELECT c.id FROM chapters c WHERE c.bookId = b.id AND c.isCompleted = 0 ORDER BY c.number ASC, c.id ASC LIMIT 1) AS nextChapterId,
+      (SELECT c.name FROM chapters c WHERE c.bookId = b.id AND c.isCompleted = 0 ORDER BY c.number ASC, c.id ASC LIMIT 1) AS nextChapterName,
+      (SELECT c.number FROM chapters c WHERE c.bookId = b.id AND c.isCompleted = 0 ORDER BY c.number ASC, c.id ASC LIMIT 1) AS nextChapterNumber
+    FROM books b
+    ORDER BY b.createdAt DESC, b.id DESC
+    """
+  )
+  fun observeBookProgressRows(): Flow<List<BookProgressRow>>
+
+  @Query(
+    """
+    SELECT
+      (SELECT COUNT(*) FROM books) AS totalBooks,
+      (SELECT COUNT(*) FROM chapters) AS totalChapters,
+      (SELECT COALESCE(SUM(CASE WHEN isCompleted = 1 THEN 1 ELSE 0 END), 0) FROM chapters) AS completedChapters,
+      (SELECT COALESCE(SUM(CASE WHEN isCompleted = 1 AND completedAt IS NOT NULL AND completedAt >= :startOfTodayMillis AND completedAt < :endOfTodayMillis THEN 1 ELSE 0 END), 0) FROM chapters) AS completedToday
+    """
+  )
+  fun observeOverallProgressRow(
+    startOfTodayMillis: Long,
+    endOfTodayMillis: Long,
+  ): Flow<OverallProgressRow>
+
+  @Query(
+    "SELECT completedAt FROM chapters WHERE isCompleted = 1 AND completedAt IS NOT NULL AND completedAt >= :startMillis AND completedAt < :endMillis"
+  )
+  fun observeCompletedTimestampsBetween(startMillis: Long, endMillis: Long): Flow<List<Long>>
+
+  @Query(
+    "SELECT COUNT(*) FROM chapters WHERE isCompleted = 1 AND completedAt IS NOT NULL AND completedAt < :beforeMillis"
+  )
+  fun observeCompletedCountBefore(beforeMillis: Long): Flow<Int>
+
+  @Query("SELECT COUNT(*) FROM chapters WHERE isCompleted = 1 AND completedAt IS NULL")
+  fun observeCompletedWithoutTimestampCount(): Flow<Int>
+
+  @Query("SELECT COUNT(*) FROM chapters")
+  fun observeTotalChapterCount(): Flow<Int>
+
   @Query("SELECT * FROM books ORDER BY createdAt DESC, id DESC")
   suspend fun getAllBooksOnce(): List<BookEntity>
 
   @Query("SELECT * FROM chapters ORDER BY number ASC, id ASC")
   suspend fun getAllChaptersOnce(): List<ChapterEntity>
+
+  @Query("SELECT * FROM chapters WHERE id = :chapterId LIMIT 1")
+  suspend fun getChapterByIdOnce(chapterId: Long): ChapterEntity?
+
+  @Query("SELECT * FROM chapters WHERE bookId = :bookId ORDER BY number ASC, id ASC")
+  suspend fun getChaptersForBookOnce(bookId: Long): List<ChapterEntity>
 
   @Query(
     """
@@ -168,6 +240,9 @@ interface SyllabusDao {
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun insertBook(book: BookEntity): Long
 
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun insertBooks(books: List<BookEntity>): List<Long>
+
   @Update
   suspend fun updateBook(book: BookEntity)
 
@@ -182,6 +257,9 @@ interface SyllabusDao {
 
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun insertChapter(chapter: ChapterEntity): Long
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun insertChapters(chapters: List<ChapterEntity>): List<Long>
 
   @Update
   suspend fun updateChapter(chapter: ChapterEntity)

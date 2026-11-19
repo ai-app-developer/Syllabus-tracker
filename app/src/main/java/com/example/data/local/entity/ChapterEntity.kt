@@ -1,10 +1,12 @@
 package com.example.data.local.entity
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
+@Immutable
 @Entity(
   tableName = "chapters",
   foreignKeys =
@@ -16,7 +18,12 @@ import androidx.room.PrimaryKey
         onDelete = ForeignKey.CASCADE,
       )
     ],
-  indices = [Index(value = ["bookId"])],
+  indices =
+    [
+      Index(value = ["bookId"]),
+      Index(value = ["bookId", "isCompleted"]),
+      Index(value = ["completedAt"]),
+    ],
 )
 data class ChapterEntity(
   @PrimaryKey(autoGenerate = true) val id: Long = 0L,

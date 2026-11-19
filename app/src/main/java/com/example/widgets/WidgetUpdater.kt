@@ -8,12 +8,18 @@ import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.BuildConfig
 import com.example.SyllabusApplication
 import com.example.data.local.dao.WidgetSummaryRow
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -21,14 +27,62 @@ import kotlinx.coroutines.withContext
 object WidgetUpdater {
   private const val TAG = "WidgetUpdater"
   private const val UNIQUE_WORK_NAME = "syllabus_widget_periodic_refresh"
+  private const val COALESCE_WINDOW_MS = 100L
+
+  private data class WidgetUpdateRequest(
+    val app: Context,
+    val force: Boolean,
+    val precomputedSummary: WidgetSummaryRow?,
+  )
 
   private val updateMutex = Mutex()
+  private val updaterScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val requestChannel = Channel<WidgetUpdateRequest>(Channel.CONFLATED)
+
+  init {
+    updaterScope.launch {
+      for (first in requestChannel) {
+        delay(COALESCE_WINDOW_MS)
+        var latest = first
+        while (true) {
+          val next = requestChannel.tryReceive().getOrNull() ?: break
+          latest =
+            WidgetUpdateRequest(
+              app = next.app,
+              force = latest.force || next.force,
+              precomputedSummary = next.precomputedSummary,
+            )
+        }
+        runCatching {
+          updateNow(
+            context = latest.app,
+            force = latest.force,
+            precomputedSummary = latest.precomputedSummary,
+          )
+        }
+      }
+    }
+  }
 
   @Volatile
   private var lastSummary: WidgetSummaryRow? = null
 
   fun clearLastSummary() {
     lastSummary = null
+  }
+
+  fun requestUpdate(
+    context: Context,
+    force: Boolean = false,
+    precomputedSummary: WidgetSummaryRow? = null,
+  ) {
+    requestChannel.trySend(
+      WidgetUpdateRequest(
+        app = context.applicationContext,
+        force = force,
+        precomputedSummary = precomputedSummary,
+      )
+    )
   }
 
   suspend fun updateNow(
@@ -84,8 +138,10 @@ object WidgetUpdater {
         doneIds.isEmpty() &&
         continueIds.isEmpty()
     ) {
-      val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
-      Log.d(TAG, "updateNow took $elapsedMs ms")
+      if (BuildConfig.DEBUG) {
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+        Log.d(TAG, "updateNow took $elapsedMs ms")
+      }
       return
     }
 
@@ -106,8 +162,10 @@ object WidgetUpdater {
         }
 
     if (!force && summary == lastSummary) {
-      val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
-      Log.d(TAG, "updateNow took $elapsedMs ms")
+      if (BuildConfig.DEBUG) {
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+        Log.d(TAG, "updateNow took $elapsedMs ms")
+      }
       return
     }
 
@@ -143,8 +201,10 @@ object WidgetUpdater {
     }
 
     lastSummary = summary
-    val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
-    Log.d(TAG, "updateNow took $elapsedMs ms")
+    if (BuildConfig.DEBUG) {
+      val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+      Log.d(TAG, "updateNow took $elapsedMs ms")
+    }
   }
 
   fun schedulePeriodicRefresh(context: Context) {

@@ -7,24 +7,37 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
+import android.appwidget.AppWidgetManager
+import com.example.data.backup.BackupBook
+import com.example.data.backup.BackupChapter
 import com.example.data.backup.BackupImportMode
 import com.example.data.backup.BackupManager
+import com.example.data.backup.BackupSettings
 import com.example.data.backup.BackupValidationResult
+import com.example.data.backup.SyllabusBackup
 import com.example.data.local.SyllabusDatabase
 import com.example.data.local.entity.ActiveTimerStateEntity
 import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
+import com.example.data.local.entity.ReadingGoalEntity
+import com.example.data.local.entity.ReadingSessionEntity
+import com.example.data.local.entity.SessionEventEntity
 import com.example.data.preferences.UserPreferencesRepository
+import com.example.data.repository.StudyTrendPeriod
 import com.example.data.repository.SyllabusRepository
 import com.example.data.repository.TimerRepository
 import com.example.notifications.NotificationHelper
 import com.example.timer.AlarmFireSource
+import com.example.timer.AnalyticsPeriod
 import com.example.timer.ClockProvider
+import com.example.timer.GoalPeriodType
 import com.example.timer.PrefsAlarmDeduplicator
 import com.example.timer.ScheduledAlarmTarget
+import com.example.timer.SessionEventType
 import com.example.timer.TimerAlarmEventType
 import com.example.timer.TimerAlarmPlayer
 import com.example.timer.TimerAlarmScheduler
+import com.example.timer.TimerAnalyticsCalculator
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.timer.TimerStatus
@@ -117,7 +130,7 @@ class TimerRobolectricTest {
     val migrated =
       Room.databaseBuilder(context, SyllabusDatabase::class.java, "migration_v1_test.db")
         .allowMainThreadQueries()
-        .addMigrations(SyllabusDatabase.MIGRATION_1_2)
+        .addMigrations(SyllabusDatabase.MIGRATION_1_2, SyllabusDatabase.MIGRATION_2_3)
         .build()
 
     val books = migrated.syllabusDao().getAllBooksOnce()
@@ -128,9 +141,109 @@ class TimerRobolectricTest {
     assertEquals("Algebra", chapters.first().name)
     assertTrue(migrated.timerDao().getAllSessionsOnce().isEmpty())
 
+    val indexCursor =
+      migrated.openHelper.readableDatabase.query(
+        "SELECT name FROM sqlite_master WHERE type = 'index'"
+      )
+    val indexNames = mutableSetOf<String>()
+    indexCursor.use { cursor ->
+      while (cursor.moveToNext()) {
+        indexNames.add(cursor.getString(0))
+      }
+    }
+    assertTrue("index_chapters_bookId_isCompleted" in indexNames)
+    assertTrue("index_chapters_completedAt" in indexNames)
+    assertTrue("index_reading_sessions_sessionDate_startWallTimeMs" in indexNames)
+    assertTrue("index_reading_sessions_startWallTimeMs" in indexNames)
+
     migrated.close()
     dbFile.delete()
   }
+
+  @Test
+  fun `migration 2 to 3 adds performance indexes without losing existing sessions or chapters`() =
+    runTest {
+      val dbFile = context.getDatabasePath("migration_v2_test.db")
+      dbFile.parentFile?.mkdirs()
+      if (dbFile.exists()) dbFile.delete()
+
+      val factory = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory()
+      val helper =
+        factory.create(
+          androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name("migration_v2_test.db")
+            .callback(
+              object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(2) {
+                override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                  db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `books` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+                  )
+                  db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `chapters` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `bookId` INTEGER NOT NULL, `name` TEXT NOT NULL, `number` INTEGER NOT NULL, `isCompleted` INTEGER NOT NULL, `completedAt` INTEGER, FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                  )
+                  db.execSQL("CREATE INDEX IF NOT EXISTS `index_chapters_bookId` ON `chapters` (`bookId`)")
+                  SyllabusDatabase.MIGRATION_1_2.migrate(db)
+                  db.execSQL("INSERT INTO `books` (`id`, `name`, `createdAt`) VALUES (1, 'Biology', 1000)")
+                  db.execSQL(
+                    "INSERT INTO `chapters` (`id`, `bookId`, `name`, `number`, `isCompleted`, `completedAt`) VALUES (10, 1, 'Genetics', 2, 1, 5000)"
+                  )
+                  db.execSQL(
+                    """
+                    INSERT INTO `reading_sessions` (
+                      `id`, `sessionId`, `bookId`, `chapterId`, `mode`, `status`,
+                      `startWallTimeMs`, `endWallTimeMs`, `activeFocusMs`, `pauseMs`,
+                      `breakMs`, `goalMs`, `notes`, `sessionDate`, `createdAt`
+                    ) VALUES (
+                      100, 'sess-v2', 1, 10, 'STOPWATCH', 'SAVED',
+                      4000, 10000, 6000, 0, 0, NULL, 'v2 note', '2026-11-18', 10000
+                    )
+                    """
+                      .trimIndent()
+                  )
+                }
+
+                override fun onUpgrade(
+                  db: androidx.sqlite.db.SupportSQLiteDatabase,
+                  oldVersion: Int,
+                  newVersion: Int,
+                ) = Unit
+              }
+            )
+            .build()
+        )
+      helper.writableDatabase.close()
+      helper.close()
+
+      val migrated =
+        Room.databaseBuilder(context, SyllabusDatabase::class.java, "migration_v2_test.db")
+          .allowMainThreadQueries()
+          .addMigrations(SyllabusDatabase.MIGRATION_1_2, SyllabusDatabase.MIGRATION_2_3)
+          .build()
+
+      assertEquals(1, migrated.syllabusDao().getAllBooksOnce().size)
+      assertEquals(1, migrated.syllabusDao().getAllChaptersOnce().size)
+      val sessions = migrated.timerDao().getAllSessionsOnce()
+      assertEquals(1, sessions.size)
+      assertEquals("sess-v2", sessions.first().sessionId)
+
+      val indexCursor =
+        migrated.openHelper.readableDatabase.query(
+          "SELECT name FROM sqlite_master WHERE type = 'index'"
+        )
+      val indexNames = mutableSetOf<String>()
+      indexCursor.use { cursor ->
+        while (cursor.moveToNext()) {
+          indexNames.add(cursor.getString(0))
+        }
+      }
+      assertTrue("index_chapters_bookId_isCompleted" in indexNames)
+      assertTrue("index_chapters_completedAt" in indexNames)
+      assertTrue("index_reading_sessions_sessionDate_startWallTimeMs" in indexNames)
+      assertTrue("index_reading_sessions_startWallTimeMs" in indexNames)
+
+      migrated.close()
+      dbFile.delete()
+    }
 
   @Test
   fun `stopwatch start pause resume lap save tracks exact focus and pause times and blocks duplicate session`() =
@@ -945,5 +1058,478 @@ class TimerRobolectricTest {
 
       assertTrue(NotificationHelper.isTimerAlarmChannelSoundAllowed(context))
     }
+
+  @Test
+  fun `sql analytics aggregate queries match in-memory compute across all periods`() = runTest {
+    val zone = ZoneId.systemDefault()
+    val today = java.time.LocalDate.of(2026, 11, 18)
+    val yesterday = today.minusDays(1)
+    val lastWeek = today.minusDays(7)
+
+    val dao = db.syllabusDao()
+    val timerDao = db.timerDao()
+    val bookIds = (1..5).map { idx -> dao.insertBook(BookEntity(name = "Subject $idx")) }
+    val chapterIds =
+      bookIds.map { bId -> dao.insertChapter(ChapterEntity(bookId = bId, name = "Ch 1", number = 1)) }
+
+    suspend fun insertSaved(id: String, bookIdx: Int, date: java.time.LocalDate, focusMs: Long) {
+      val wall = date.atStartOfDay(zone).toInstant().toEpochMilli() + 3_600_000L
+      timerDao.insertSession(
+        ReadingSessionEntity(
+          sessionId = id,
+          bookId = bookIds[bookIdx],
+          chapterId = chapterIds[bookIdx],
+          mode = TimerMode.STOPWATCH,
+          status = "SAVED",
+          startWallTimeMs = wall,
+          endWallTimeMs = wall + focusMs,
+          activeFocusMs = focusMs,
+          pauseMs = 0L,
+          breakMs = 0L,
+          goalMs = null,
+          notes = "",
+          sessionDate = date.toString(),
+          createdAt = wall + focusMs,
+        )
+      )
+    }
+
+    insertSaved("sql-1", 0, today, 2 * 3_600_000L)
+    insertSaved("sql-2", 1, today, 90 * 60_000L)
+    insertSaved("sql-3", 2, yesterday, 60 * 60_000L)
+    insertSaved("sql-4", 3, yesterday, 30 * 60_000L)
+    insertSaved("sql-5", 4, yesterday, 30 * 60_000L)
+    insertSaved("sql-prev", 0, lastWeek, 165 * 60_000L)
+
+    val allSessions = timerDao.observeAllSessionsWithMeta().first()
+    val todayMs = timerDao.observeTodayFocusMs(today.toString()).first()
+    val activeDates = timerDao.observeDistinctActiveDatesDescending().first()
+
+    for (period in AnalyticsPeriod.entries) {
+      val bounds = TimerAnalyticsCalculator.periodBounds(period, today)
+      val periodTotal =
+        timerDao.observeTotalFocusMsBetween(bounds.start.toString(), bounds.end.toString()).first()
+      val prevTotal =
+        timerDao
+          .observeTotalFocusMsBetween(bounds.prevStart.toString(), bounds.prevEnd.toString())
+          .first()
+      val dailyRows =
+        timerDao.observeDailyFocusTotalsBetween(bounds.start.toString(), bounds.end.toString()).first()
+      val bookRows =
+        timerDao.observeBookFocusTotalsBetween(bounds.start.toString(), bounds.end.toString()).first()
+
+      val sqlResult =
+        TimerAnalyticsCalculator.computeFromAggregates(
+          period = period,
+          todayTotalMs = todayMs,
+          periodTotalMs = periodTotal,
+          previousPeriodTotalMs = prevTotal,
+          dailyRows = dailyRows,
+          bookRows = bookRows,
+          activeDatesDesc = activeDates,
+          today = today,
+        )
+      val memoryResult =
+        TimerAnalyticsCalculator.compute(
+          sessions = allSessions,
+          period = period,
+          today = today,
+          zoneId = zone,
+        )
+      assertEquals(memoryResult, sqlResult)
+    }
+  }
+
+  @Test
+  fun `sql syllabus projections and batched 500-chapter backup import preserve data accurately`() =
+    runTest {
+      val prefs = UserPreferencesRepository(context)
+      val syllabusRepo =
+        SyllabusRepository(
+          dao = db.syllabusDao(),
+          prefsRepo = prefs,
+          runInTransaction = { block -> db.withTransaction { block() } },
+        )
+
+      val books =
+        (1..5).map { bIdx ->
+          BackupBook(id = bIdx.toLong(), name = "Book $bIdx", createdAt = 1_000L + bIdx)
+        }
+      val nowMillis = System.currentTimeMillis()
+      val chapters =
+        (1..500).map { idx ->
+          val bookIdx = ((idx - 1) % 5) + 1
+          val completed = idx % 2 == 0
+          BackupChapter(
+            id = idx.toLong(),
+            bookId = bookIdx.toLong(),
+            name = "Chapter $idx",
+            number = idx,
+            isCompleted = completed,
+            completedAt = if (completed) nowMillis else null,
+            createdAt = 1_000L + idx,
+          )
+        }
+      val backup =
+        SyllabusBackup(
+          appVersion = "1.0",
+          schemaVersion = 1,
+          exportedAt = nowMillis,
+          settings = BackupSettings(dailyGoal = 5, reminderEnabled = true, reminderHour = 20, reminderMinute = 0),
+          books = books,
+          chapters = chapters,
+        )
+
+      syllabusRepo.importBackup(backup, BackupImportMode.REPLACE)
+
+      val overall = syllabusRepo.observeOverallStats().first()
+      val summaries = syllabusRepo.observeBookSummaries().first()
+      assertEquals(5, overall.totalBooks)
+      assertEquals(500, overall.totalChapters)
+      assertEquals(250, overall.completedChapters)
+      assertEquals(250, overall.remainingChapters)
+      assertEquals(50, overall.overallPercentage)
+      assertEquals(250, overall.completedToday)
+      assertEquals(5, summaries.size)
+      assertTrue(summaries.all { it.totalChapters == 100 && it.completedChapters == 50 })
+
+      val trend = syllabusRepo.observeWeeklyTrend(StudyTrendPeriod.THIS_WEEK).first()
+      assertEquals(7, trend.size)
+      assertEquals(250, trend.first { it.isToday }.count)
+
+      val cumulative = syllabusRepo.observeCumulativeSeries(StudyTrendPeriod.THIS_WEEK).first()
+      assertEquals(7, cumulative.size)
+      assertEquals(0.5f, cumulative.last(), 0.001f)
+    }
+
+  @Test
+  fun `widget updater coalesces burst requests and skips redundant unchanged updates`() = runTest {
+    val app = context.applicationContext as SyllabusApplication
+    val appWidgetManager = AppWidgetManager.getInstance(app)
+    val shadowManager = Shadows.shadowOf(appWidgetManager)
+    shadowManager.createWidgets(
+      com.example.widgets.OverviewWidgetReceiver::class.java,
+      R.layout.widget_overview,
+      1,
+    )
+
+    val bookId = app.syllabusRepository.addBook("Algorithms")
+    try {
+      app.syllabusRepository.addChapter(bookId, "Sorting", 1, isCompleted = true)
+
+      ShadowLog.clear()
+      com.example.widgets.WidgetUpdater.clearLastSummary()
+      com.example.widgets.WidgetUpdater.updateNow(app, force = true)
+      com.example.widgets.WidgetUpdater.updateNow(app, force = false)
+
+      repeat(10) {
+        com.example.widgets.WidgetUpdater.requestUpdate(app)
+      }
+      kotlinx.coroutines.delay(250L)
+
+      val updateLogs = ShadowLog.getLogsForTag("WidgetUpdater").map { it.msg }
+      assertTrue(updateLogs.any { it.startsWith("updateNow took ") })
+    } finally {
+      app.syllabusRepository.deleteBook(bookId)
+    }
+  }
+
+  @Test
+  fun `backup v2 exports all saved study history, events, goals, and settings while excluding running active timer`() =
+    runTest {
+      val prefs = UserPreferencesRepository(context)
+      val syllabusRepo =
+        SyllabusRepository(
+          dao = db.syllabusDao(),
+          timerDao = db.timerDao(),
+          prefsRepo = prefs,
+          runInTransaction = { block -> db.withTransaction { block() } },
+        )
+
+      val bookId = syllabusRepo.addBook("Physics")
+      val chId = syllabusRepo.addChapter(bookId, "Mechanics", 1, isCompleted = true)
+      syllabusRepo.setDailyGoal(4)
+      syllabusRepo.setTimerAlarmEnabled(false)
+      syllabusRepo.setTimerVibrationEnabled(true)
+      syllabusRepo.setTimerPermissionChecklistShown(true)
+      syllabusRepo.setPomodoroDurations(45, 15)
+
+      // 1. Complete a session with pause, lap, and midnight crossing
+      val zone = ZoneId.of("UTC")
+      val startMidnight = ZonedDateTime.of(2026, 11, 17, 23, 30, 0, 0, zone).toInstant().toEpochMilli()
+      val endMidnight = ZonedDateTime.of(2026, 11, 18, 1, 30, 0, 0, zone).toInstant().toEpochMilli()
+      val slices =
+        TimerMath.splitSessionAcrossDays(
+          baseSessionId = "sess-long-midnight",
+          bookId = bookId,
+          chapterId = chId,
+          mode = TimerMode.POMODORO,
+          startWallTimeMs = startMidnight,
+          endWallTimeMs = endMidnight,
+          activeFocusMs = 6_600_000L, // 1h 50m active
+          pauseMs = 600_000L, // 10m pause
+          breakMs = 300_000L, // 5m break
+          goalMs = 7_200_000L,
+          notes = "Worked derivations",
+          zoneId = zone,
+        )
+      assertEquals(2, slices.size)
+      db.timerDao().insertSessions(slices)
+      db.timerDao().insertEvents(
+        listOf(
+          SessionEventEntity(
+            sessionId = "sess-long-midnight",
+            bookId = bookId,
+            chapterId = chId,
+            eventType = SessionEventType.START,
+            elapsedAtEventMs = 0L,
+            wallTimeMs = startMidnight,
+          ),
+          SessionEventEntity(
+            sessionId = "sess-long-midnight",
+            bookId = bookId,
+            chapterId = chId,
+            eventType = SessionEventType.LAP,
+            elapsedAtEventMs = 3_600_000L,
+            wallTimeMs = startMidnight + 3_600_000L,
+            label = "Lap 1",
+          ),
+        )
+      )
+      db.timerDao().insertGoal(
+        ReadingGoalEntity(
+          periodType = GoalPeriodType.DAILY,
+          targetMinutes = 120,
+          isActive = true,
+          createdAt = startMidnight,
+        )
+      )
+
+      // 2. Start an unfinished/running timer session that must NOT be exported
+      assertTrue(repo.startSession(bookId = bookId, chapterId = chId, mode = TimerMode.STOPWATCH))
+      val activeSessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
+
+      val exportedJson = syllabusRepo.exportBackupJson("2.0")
+      val validation = BackupManager.parseAndValidate(exportedJson)
+      assertTrue(validation is BackupValidationResult.Valid)
+      val backup = (validation as BackupValidationResult.Valid).backup
+
+      assertEquals(2, backup.schemaVersion)
+      assertEquals(1, backup.counts?.books)
+      assertEquals(1, backup.counts?.chapters)
+      assertEquals(2, backup.counts?.sessions)
+      assertEquals(2, backup.counts?.sessionEvents)
+      assertEquals(1, backup.counts?.goals)
+      assertEquals(45, backup.settings.pomodoroFocusMinutes)
+      assertEquals(15, backup.settings.pomodoroBreakMinutes)
+      assertTrue(backup.settings.timerPermissionChecklistShown)
+      assertFalse(backup.settings.timerAlarmEnabled)
+      assertEquals(2, backup.sessions.size)
+      assertTrue(backup.sessions.all { it.bookName == "Physics" && it.chapterName == "Mechanics" })
+      assertEquals(6_600_000L, backup.sessions.sumOf { it.activeFocusMs })
+      assertEquals(600_000L, backup.sessions.sumOf { it.pauseMs })
+      assertEquals(300_000L, backup.sessions.sumOf { it.breakMs })
+      assertFalse(backup.sessions.any { it.sessionId.contains(activeSessionId) })
+      assertFalse(backup.sessionEvents.any { it.sessionId == activeSessionId })
+
+      // 3. Simulate fresh install (clear all data & reset settings) and import in REPLACE mode
+      repo.discardCurrentSession()
+      db.timerDao().deleteAllSessionEvents()
+      db.timerDao().deleteAllReadingSessions()
+      db.timerDao().deleteAllReadingGoals()
+      db.syllabusDao().deleteAllChapters()
+      db.syllabusDao().deleteAllBooks()
+      syllabusRepo.setPomodoroDurations(25, 5)
+      syllabusRepo.setDailyGoal(2)
+
+      val replaceResult = syllabusRepo.importBackupWithResult(backup, BackupImportMode.REPLACE)
+      assertEquals(1, replaceResult.booksImported)
+      assertEquals(1, replaceResult.chaptersImported)
+      assertEquals(2, replaceResult.sessionsImported)
+      assertEquals(2, replaceResult.sessionEventsImported)
+      assertEquals(1, replaceResult.goalsImported)
+      assertEquals(45, replaceResult.preferences.pomodoroFocusMinutes)
+      assertEquals(15, replaceResult.preferences.pomodoroBreakMinutes)
+      assertEquals(4, replaceResult.preferences.dailyGoal)
+
+      val restoredSessions = db.timerDao().getAllSessionsOnce()
+      assertEquals(2, restoredSessions.size)
+      assertEquals(6_600_000L, restoredSessions.sumOf { it.activeFocusMs })
+      assertEquals(listOf("2026-11-17", "2026-11-18"), restoredSessions.map { it.sessionDate }.sorted())
+      assertEquals(2, db.timerDao().getAllEventsOnce().size)
+      assertEquals(1, db.timerDao().getAllGoalsOnce().size)
+
+      // 4. Re-import same backup in MERGE mode -> zero new rows and duplicate skips reported
+      val mergeSameResult = syllabusRepo.importBackupWithResult(backup, BackupImportMode.MERGE)
+      assertEquals(0, mergeSameResult.booksImported)
+      assertEquals(0, mergeSameResult.chaptersImported)
+      assertEquals(0, mergeSameResult.sessionsImported)
+      assertEquals(0, mergeSameResult.sessionEventsImported)
+      assertEquals(0, mergeSameResult.goalsImported)
+      assertTrue(mergeSameResult.skippedDuplicates > 0)
+      assertEquals(2, db.timerDao().getAllSessionsOnce().size)
+    }
+
+  @Test
+  fun `merge import remaps differing bookId and chapterId while preventing duplicate sessions`() =
+    runTest {
+      val prefs = UserPreferencesRepository(context)
+      val syllabusRepo =
+        SyllabusRepository(
+          dao = db.syllabusDao(),
+          timerDao = db.timerDao(),
+          prefsRepo = prefs,
+          runInTransaction = { block -> db.withTransaction { block() } },
+        )
+
+      // Existing local DB has Book "Biology" with id=100 and Chapter #1 with id=500
+      db.syllabusDao().insertBooks(listOf(BookEntity(id = 100L, name = "Biology", createdAt = 1000L)))
+      db.syllabusDao()
+        .insertChapters(
+          listOf(
+            ChapterEntity(
+              id = 500L,
+              bookId = 100L,
+              name = "Cell Structure",
+              number = 1,
+              isCompleted = false,
+              completedAt = null,
+            )
+          )
+        )
+
+      // Incoming backup has Book "biology" with id=1 and Chapter #1 with id=10
+      val incomingJson =
+        """
+        {
+          "appVersion": "2.0",
+          "schemaVersion": 2,
+          "exportedAt": 1763400000000,
+          "settings": {
+            "dailyGoal": 3,
+            "reminderEnabled": true,
+            "reminderHour": 19,
+            "reminderMinute": 30,
+            "pomodoroFocusMinutes": 50,
+            "pomodoroBreakMinutes": 10
+          },
+          "books": [
+            { "id": 1, "name": "biology", "createdAt": 1000 }
+          ],
+          "chapters": [
+            { "id": 10, "bookId": 1, "name": "Cell Structure", "number": 1, "isCompleted": false, "completedAt": null, "createdAt": 1000 }
+          ],
+          "sessions": [
+            {
+              "id": 1,
+              "sessionId": "remapped-sess-1#2026-11-18",
+              "bookId": 1,
+              "bookName": "biology",
+              "chapterId": 10,
+              "chapterName": "Cell Structure",
+              "mode": "STOPWATCH",
+              "status": "SAVED",
+              "startWallTimeMs": 1763350000000,
+              "endWallTimeMs": 1763353600000,
+              "activeFocusMs": 3600000,
+              "pauseMs": 0,
+              "breakMs": 0,
+              "activeDurationSeconds": 3600,
+              "pauseDurationSeconds": 0,
+              "goalMs": null,
+              "notes": "Merged study",
+              "sessionDate": "2026-11-18",
+              "createdAt": 1763353600000
+            }
+          ],
+          "sessionEvents": [
+            {
+              "id": 1,
+              "sessionId": "remapped-sess-1",
+              "bookId": 1,
+              "chapterId": 10,
+              "eventType": "START",
+              "elapsedAtEventMs": 0,
+              "wallTimeMs": 1763350000000,
+              "label": null
+            }
+          ],
+          "goals": [
+            { "id": 1, "periodType": "WEEKLY", "targetMinutes": 600, "isActive": true, "createdAt": 1763300000000 }
+          ]
+        }
+        """.trimIndent()
+
+      val (existingBookIds, existingChapterIds) = syllabusRepo.getExistingBookAndChapterIds()
+      val validation = BackupManager.parseAndValidate(incomingJson, existingBookIds, existingChapterIds)
+      assertTrue(validation is BackupValidationResult.Valid)
+      val backup = (validation as BackupValidationResult.Valid).backup
+
+      val firstMerge = syllabusRepo.importBackupWithResult(backup, BackupImportMode.MERGE)
+      assertEquals(0, firstMerge.booksImported)
+      assertEquals(0, firstMerge.chaptersImported)
+      assertEquals(1, firstMerge.sessionsImported)
+      assertEquals(1, firstMerge.sessionEventsImported)
+      assertEquals(1, firstMerge.goalsImported)
+
+      val sessions = db.timerDao().getAllSessionsOnce()
+      assertEquals(1, sessions.size)
+      assertEquals(100L, sessions.first().bookId)
+      assertEquals(500L, sessions.first().chapterId)
+      assertEquals(3_600_000L, sessions.first().activeFocusMs)
+
+      val events = db.timerDao().getAllEventsOnce()
+      assertEquals(1, events.size)
+      assertEquals(100L, events.first().bookId)
+      assertEquals(500L, events.first().chapterId)
+
+      // Importing a copy with a different sessionId but identical (startWallTimeMs, targetChapterId, activeFocusMs) skips duplicate
+      val duplicateContentBackup =
+        backup.copy(
+          sessions = backup.sessions.map { it.copy(sessionId = "different-uuid#2026-11-18") }
+        )
+      val secondMerge = syllabusRepo.importBackupWithResult(duplicateContentBackup, BackupImportMode.MERGE)
+      assertEquals(0, secondMerge.sessionsImported)
+      assertEquals(1, db.timerDao().getAllSessionsOnce().size)
+    }
+
+  @Test
+  fun `resetAfterBackupImport clears recovery prompt and alarms on replace`() = runTest {
+    val bookId = db.syllabusDao().insertBook(BookEntity(name = "Chemistry"))
+    val chapterId =
+      db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Reactions", number = 1))
+
+    var cancelCount = 0
+    val testRepo =
+      TimerRepository(
+        timerDao = db.timerDao(),
+        syllabusDao = db.syllabusDao(),
+        runInTransaction = { block -> db.withTransaction { block() } },
+        clock = clock,
+        zoneId = ZoneId.of("UTC"),
+        onSyncAlarm = { state -> if (state == null) cancelCount++ },
+      )
+
+    assertTrue(testRepo.startSession(bookId = bookId, chapterId = chapterId, mode = TimerMode.STOPWATCH))
+    clock.advance(10_000L)
+
+    val coldLaunchRepo =
+      TimerRepository(
+        timerDao = db.timerDao(),
+        syllabusDao = db.syllabusDao(),
+        runInTransaction = { block -> db.withTransaction { block() } },
+        clock = clock,
+        zoneId = ZoneId.of("UTC"),
+        onSyncAlarm = { state -> if (state == null) cancelCount++ },
+      )
+    coldLaunchRepo.checkUnfinishedSessionOnLaunch()
+    assertNotNull(coldLaunchRepo.recoveryPrompt.first())
+
+    db.timerDao().clearActiveTimerState()
+    coldLaunchRepo.resetAfterBackupImport(wasReplaceMode = true)
+    assertNull(coldLaunchRepo.recoveryPrompt.first())
+    assertTrue(cancelCount > 0)
+  }
 }
+
 

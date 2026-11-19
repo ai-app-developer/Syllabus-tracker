@@ -14,6 +14,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import com.example.BuildConfig
 import com.example.R
 import com.example.SyllabusApplication
 import com.example.data.repository.AlarmOutcome
@@ -35,6 +36,8 @@ interface TimerAlarmDeduplicator {
   fun clearEvent(eventKey: String, sessionId: String)
 
   fun clearSession(sessionId: String)
+
+  fun clearAll()
 }
 
 class InMemoryAlarmDeduplicator : TimerAlarmDeduplicator {
@@ -75,6 +78,13 @@ class InMemoryAlarmDeduplicator : TimerAlarmDeduplicator {
         keys.clear()
         activeSessionId = null
       }
+    }
+  }
+
+  override fun clearAll() {
+    synchronized(lock) {
+      keys.clear()
+      activeSessionId = null
     }
   }
 }
@@ -122,6 +132,12 @@ class PrefsAlarmDeduplicator(context: Context) : TimerAlarmDeduplicator {
       if (storedSession == sessionId) {
         prefs.edit().remove(KEY_SESSION_ID).remove(KEY_EVENT_KEYS).apply()
       }
+    }
+  }
+
+  override fun clearAll() {
+    synchronized(lock) {
+      prefs.edit().clear().apply()
     }
   }
 
@@ -218,7 +234,9 @@ object TimerAlarmPlayer {
         expectedEventWallMs = expectedEventWallMs,
       ) ?: return null
 
-    Log.d(TAG, "fired by ${source.logLabel} ${eventType.name}, delay ${outcome.delayMs} ms")
+    if (BuildConfig.DEBUG) {
+      Log.d(TAG, "fired by ${source.logLabel} ${eventType.name}, delay ${outcome.delayMs} ms")
+    }
 
     val prefs = app.preferencesRepository.getCurrentPreferences()
     val isTooLate = outcome.delayMs > TimerAlarmScheduler.LATE_THRESHOLD_MS
@@ -262,7 +280,9 @@ object TimerAlarmPlayer {
     val notificationManager =
       appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
     if (isBlockedByDoNotDisturb(notificationManager)) {
-      Log.d(TAG, "Mini alarm suppressed by Do Not Disturb")
+      if (BuildConfig.DEBUG) {
+        Log.d(TAG, "Mini alarm suppressed by Do Not Disturb")
+      }
       return false
     }
 

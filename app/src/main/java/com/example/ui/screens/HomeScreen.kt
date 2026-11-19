@@ -51,6 +51,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -62,8 +63,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.data.repository.SyllabusSnapshot
 import com.example.ui.theme.AmbientShadow
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardSurface
@@ -83,12 +84,19 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VibrantGreen
 import com.example.ui.theme.VioletGradientBottom
 import com.example.ui.theme.VioletGradientTop
+import com.example.ui.viewmodel.HomeUiState
 import com.example.ui.viewmodel.LiveStudyingUiState
+import kotlinx.coroutines.flow.StateFlow
+
+private val HomeTimerCardGradient =
+  Brush.horizontalGradient(colors = listOf(SoftLavenderCardStart, SoftLavenderCardEnd))
+private val HomeTimerPlayGradient =
+  Brush.verticalGradient(colors = listOf(VioletGradientTop, VioletGradientBottom))
 
 @Composable
 fun HomeScreen(
-  snapshot: SyllabusSnapshot,
-  liveStudying: LiveStudyingUiState,
+  state: HomeUiState,
+  liveStudyingState: StateFlow<LiveStudyingUiState>,
   innerPadding: PaddingValues,
   onBellClick: () -> Unit,
   onStudyTimerClick: () -> Unit,
@@ -97,8 +105,8 @@ fun HomeScreen(
   onAddBookClick: () -> Unit,
 ) {
   val targetFraction =
-    if (snapshot.totalChapters == 0) 0f
-    else snapshot.completedChapters.toFloat() / snapshot.totalChapters.toFloat()
+    if (state.totalChapters == 0) 0f
+    else state.completedChapters.toFloat() / state.totalChapters.toFloat()
   val animatedFraction by
     animateFloatAsState(
       targetValue = targetFraction.coerceIn(0f, 1f),
@@ -106,8 +114,8 @@ fun HomeScreen(
       label = "home_progress_ring",
     )
 
-  val remainingToday = (snapshot.preferences.dailyGoal - snapshot.completedToday).coerceAtLeast(0)
-  val showBellDot = snapshot.preferences.reminderEnabled && remainingToday > 0
+  val remainingToday = (state.preferences.dailyGoal - state.completedToday).coerceAtLeast(0)
+  val showBellDot = state.preferences.reminderEnabled && remainingToday > 0
 
   Box(
     modifier = Modifier.fillMaxSize().background(AppBackground),
@@ -213,7 +221,7 @@ fun HomeScreen(
           }
           Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-              text = "${snapshot.overallPercentage}%",
+              text = "${state.overallPercentage}%",
               fontSize = 42.sp,
               fontWeight = FontWeight.Bold,
               letterSpacing = (-1).sp,
@@ -252,7 +260,7 @@ fun HomeScreen(
           HomeStatColumn(
             icon = Icons.AutoMirrored.Outlined.MenuBook,
             iconTint = PrimaryIndigo,
-            value = snapshot.totalBooks.toString(),
+            value = state.totalBooks.toString(),
             label = stringResource(R.string.books_label),
             modifier = Modifier.weight(1f),
           )
@@ -264,7 +272,7 @@ fun HomeScreen(
           HomeStatColumn(
             icon = Icons.Outlined.Layers,
             iconTint = PrimaryIndigo,
-            value = snapshot.totalChapters.toString(),
+            value = state.totalChapters.toString(),
             label = stringResource(R.string.chapters_label),
             modifier = Modifier.weight(1f),
           )
@@ -276,7 +284,7 @@ fun HomeScreen(
           HomeStatColumn(
             icon = Icons.Outlined.CheckCircle,
             iconTint = VibrantGreen,
-            value = snapshot.completedChapters.toString(),
+            value = state.completedChapters.toString(),
             label = stringResource(R.string.completed_label),
             modifier = Modifier.weight(1f),
           )
@@ -285,114 +293,22 @@ fun HomeScreen(
 
       Spacer(modifier = Modifier.height(12.dp))
 
-      val activeMeta = liveStudying.activeMeta
-      val timerCardTitle =
-        if (liveStudying.isRunningOrPaused && activeMeta != null) {
-          "Study Timer • ${liveStudying.primaryClockDisplay}"
-        } else {
-          stringResource(R.string.study_timer_title)
-        }
-      val timerCardSubtitle =
-        if (liveStudying.isRunningOrPaused && activeMeta != null) {
-          val prefix = if (liveStudying.isPaused) "Paused • " else ""
-          "$prefix${activeMeta.bookName} • ${activeMeta.chapterLabel}"
-        } else {
-          "Track your reading time"
-        }
-
-      Surface(
+      HomeStudyTimerCard(
+        liveStudyingState = liveStudyingState,
+        cardShape = cardShape,
         onClick = onStudyTimerClick,
-        shape = cardShape,
-        color = Color.Transparent,
-        border = BorderStroke(1.dp, SoftLavenderBorder),
-        modifier =
-          Modifier.fillMaxWidth()
-            .shadow(
-              elevation = 8.dp,
-              shape = cardShape,
-              clip = false,
-              ambientColor = AmbientShadow,
-              spotColor = AmbientShadow,
-            )
-            .testTag("home_study_timer_card"),
-      ) {
-        Row(
-          modifier =
-            Modifier.fillMaxWidth()
-              .background(
-                Brush.horizontalGradient(
-                  colors = listOf(SoftLavenderCardStart, SoftLavenderCardEnd)
-                )
-              )
-              .padding(horizontal = 16.dp, vertical = 14.dp),
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Box(
-            modifier =
-              Modifier.size(44.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.White.copy(alpha = 0.85f)),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Outlined.Timer,
-              contentDescription = null,
-              tint = PrimaryIndigo,
-              modifier = Modifier.size(24.dp),
-            )
-          }
-          Spacer(modifier = Modifier.width(14.dp))
-          Column(modifier = Modifier.weight(1f)) {
-            Text(
-              text = timerCardTitle,
-              fontSize = 16.sp,
-              fontWeight = FontWeight.Bold,
-              color = TextPrimary,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-              text = timerCardSubtitle,
-              fontSize = 13.sp,
-              color = TextSecondary,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          }
-          Spacer(modifier = Modifier.width(10.dp))
-          Box(
-            modifier =
-              Modifier.size(40.dp)
-                .clip(CircleShape)
-                .background(
-                  Brush.verticalGradient(
-                    colors = listOf(VioletGradientTop, VioletGradientBottom)
-                  )
-                ),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(
-              imageVector = Icons.Default.PlayArrow,
-              contentDescription =
-                if (liveStudying.isRunningOrPaused) "Open running timer" else "Open study timer",
-              tint = Color.White,
-              modifier = Modifier.size(22.dp),
-            )
-          }
-        }
-      }
+      )
 
       Spacer(modifier = Modifier.height(12.dp))
 
-      val goal = snapshot.preferences.dailyGoal
+      val goal = state.preferences.dailyGoal
       val planSubtitle =
         when {
-          snapshot.completedToday == 0 ->
+          state.completedToday == 0 ->
             "Complete $goal ${if (goal == 1) "chapter" else "chapters"}"
-          snapshot.completedToday < goal ->
-            "${snapshot.completedToday} / $goal chapters done today"
-          else -> "Goal reached (${snapshot.completedToday} / $goal chapters)"
+          state.completedToday < goal ->
+            "${state.completedToday} / $goal chapters done today"
+          else -> "Goal reached (${state.completedToday} / $goal chapters)"
         }
 
       Surface(
@@ -463,7 +379,7 @@ fun HomeScreen(
 
       Spacer(modifier = Modifier.height(10.dp))
 
-      val continueBook = snapshot.continueStudyingBook
+      val continueBook = state.continueStudyingBook
       if (continueBook != null) {
         val nextChapter = continueBook.nextIncompleteChapter
         val subtitleText =
@@ -593,6 +509,104 @@ fun HomeScreen(
             }
           }
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun HomeStudyTimerCard(
+  liveStudyingState: StateFlow<LiveStudyingUiState>,
+  cardShape: Shape,
+  onClick: () -> Unit,
+) {
+  val liveStudying by liveStudyingState.collectAsStateWithLifecycle()
+  val activeMeta = liveStudying.activeMeta
+  val timerCardTitle =
+    if (liveStudying.isRunningOrPaused && activeMeta != null) {
+      "Study Timer • ${liveStudying.primaryClockDisplay}"
+    } else {
+      stringResource(R.string.study_timer_title)
+    }
+  val timerCardSubtitle =
+    if (liveStudying.isRunningOrPaused && activeMeta != null) {
+      val prefix = if (liveStudying.isPaused) "Paused • " else ""
+      "$prefix${activeMeta.bookName} • ${activeMeta.chapterLabel}"
+    } else {
+      "Track your reading time"
+    }
+
+  Surface(
+    onClick = onClick,
+    shape = cardShape,
+    color = Color.Transparent,
+    border = BorderStroke(1.dp, SoftLavenderBorder),
+    modifier =
+      Modifier.fillMaxWidth()
+        .shadow(
+          elevation = 8.dp,
+          shape = cardShape,
+          clip = false,
+          ambientColor = AmbientShadow,
+          spotColor = AmbientShadow,
+        )
+        .testTag("home_study_timer_card"),
+  ) {
+    Row(
+      modifier =
+        Modifier.fillMaxWidth()
+          .background(HomeTimerCardGradient)
+          .padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Box(
+        modifier =
+          Modifier.size(44.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.85f)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.Timer,
+          contentDescription = null,
+          tint = PrimaryIndigo,
+          modifier = Modifier.size(24.dp),
+        )
+      }
+      Spacer(modifier = Modifier.width(14.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = timerCardTitle,
+          fontSize = 16.sp,
+          fontWeight = FontWeight.Bold,
+          color = TextPrimary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+          text = timerCardSubtitle,
+          fontSize = 13.sp,
+          color = TextSecondary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      Spacer(modifier = Modifier.width(10.dp))
+      Box(
+        modifier =
+          Modifier.size(40.dp)
+            .clip(CircleShape)
+            .background(HomeTimerPlayGradient),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.PlayArrow,
+          contentDescription =
+            if (liveStudying.isRunningOrPaused) "Open running timer" else "Open study timer",
+          tint = Color.White,
+          modifier = Modifier.size(22.dp),
+        )
       }
     }
   }

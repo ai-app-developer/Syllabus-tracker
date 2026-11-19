@@ -64,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.repository.BookProgressSummary
 import com.example.timer.TimerMath
@@ -82,14 +83,19 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VibrantGreen
 import com.example.ui.viewmodel.BookFilter
 import com.example.ui.viewmodel.BookSortOrder
+import com.example.ui.viewmodel.BooksUiState
 import com.example.ui.viewmodel.LiveStudyingUiState
-import com.example.ui.viewmodel.SyllabusUiState
+import kotlinx.coroutines.flow.StateFlow
+
+private val BooksTimerCardGradient =
+  Brush.horizontalGradient(colors = listOf(SoftLavenderCardStart, SoftLavenderCardEnd))
 
 @Composable
 fun BooksScreen(
-  uiState: SyllabusUiState,
+  state: BooksUiState,
   todayStudyMs: Long,
-  liveStudying: LiveStudyingUiState,
+  isTimerActive: Boolean,
+  liveStudyingState: StateFlow<LiveStudyingUiState>,
   innerPadding: PaddingValues,
   onToggleSearch: () -> Unit,
   onSearchQueryChange: (String) -> Unit,
@@ -135,7 +141,7 @@ fun BooksScreen(
             modifier = Modifier.size(48.dp).testTag("books_search_button"),
           ) {
             Icon(
-              imageVector = if (uiState.isSearchActive) Icons.Default.Close else Icons.Default.Search,
+              imageVector = if (state.isSearchActive) Icons.Default.Close else Icons.Default.Search,
               contentDescription = "Search books",
               tint = TextPrimary,
             )
@@ -168,10 +174,10 @@ fun BooksScreen(
                   Text(
                     text = "Sort: Recently Added",
                     fontWeight =
-                      if (uiState.bookSortOrder == BookSortOrder.RECENT) FontWeight.SemiBold
+                      if (state.bookSortOrder == BookSortOrder.RECENT) FontWeight.SemiBold
                       else FontWeight.Normal,
                     color =
-                      if (uiState.bookSortOrder == BookSortOrder.RECENT) PrimaryIndigo
+                      if (state.bookSortOrder == BookSortOrder.RECENT) PrimaryIndigo
                       else TextPrimary,
                   )
                 },
@@ -185,10 +191,10 @@ fun BooksScreen(
                   Text(
                     text = "Sort: Name (A–Z)",
                     fontWeight =
-                      if (uiState.bookSortOrder == BookSortOrder.NAME_ASC) FontWeight.SemiBold
+                      if (state.bookSortOrder == BookSortOrder.NAME_ASC) FontWeight.SemiBold
                       else FontWeight.Normal,
                     color =
-                      if (uiState.bookSortOrder == BookSortOrder.NAME_ASC) PrimaryIndigo
+                      if (state.bookSortOrder == BookSortOrder.NAME_ASC) PrimaryIndigo
                       else TextPrimary,
                   )
                 },
@@ -203,19 +209,19 @@ fun BooksScreen(
       }
 
       AnimatedVisibility(
-        visible = uiState.isSearchActive,
+        visible = state.isSearchActive,
         enter = expandVertically(tween(150)) + fadeIn(tween(150)),
         exit = shrinkVertically(tween(150)) + fadeOut(tween(150)),
       ) {
         OutlinedTextField(
-          value = uiState.searchQuery,
+          value = state.searchQuery,
           onValueChange = onSearchQueryChange,
           placeholder = { Text("Search books...", color = TextSecondary) },
           leadingIcon = {
             Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary)
           },
           trailingIcon = {
-            if (uiState.searchQuery.isNotEmpty()) {
+            if (state.searchQuery.isNotEmpty()) {
               IconButton(onClick = { onSearchQueryChange("") }) {
                 Icon(Icons.Default.Close, contentDescription = "Clear search", tint = TextSecondary)
               }
@@ -243,19 +249,19 @@ fun BooksScreen(
       ) {
         FilterChipPill(
           label = stringResource(R.string.filter_all),
-          selected = uiState.bookFilter == BookFilter.ALL,
+          selected = state.bookFilter == BookFilter.ALL,
           testTag = "filter_all",
           onClick = { onSelectFilter(BookFilter.ALL) },
         )
         FilterChipPill(
           label = stringResource(R.string.filter_in_progress),
-          selected = uiState.bookFilter == BookFilter.IN_PROGRESS,
+          selected = state.bookFilter == BookFilter.IN_PROGRESS,
           testTag = "filter_in_progress",
           onClick = { onSelectFilter(BookFilter.IN_PROGRESS) },
         )
         FilterChipPill(
           label = stringResource(R.string.filter_completed),
-          selected = uiState.bookFilter == BookFilter.COMPLETED,
+          selected = state.bookFilter == BookFilter.COMPLETED,
           testTag = "filter_completed",
           onClick = { onSelectFilter(BookFilter.COMPLETED) },
         )
@@ -263,10 +269,10 @@ fun BooksScreen(
 
       Spacer(modifier = Modifier.height(14.dp))
 
-      val books = uiState.filteredBooks
+      val books = state.filteredBooks
       val bottomPad = innerPadding.calculateBottomPadding() + 14.dp
 
-      if (uiState.snapshot.books.isEmpty()) {
+      if (!state.hasAnyBooks) {
         Column(
           modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = bottomPad),
           verticalArrangement = Arrangement.SpaceBetween,
@@ -341,7 +347,8 @@ fun BooksScreen(
 
           BooksStudyTimerCard(
             todayStudyMs = todayStudyMs,
-            liveStudying = liveStudying,
+            isTimerActive = isTimerActive,
+            liveStudyingState = liveStudyingState,
             onClick = onStudyTimerClick,
           )
         }
@@ -352,7 +359,7 @@ fun BooksScreen(
           contentPadding = PaddingValues(bottom = bottomPad),
         ) {
           if (books.isEmpty()) {
-            item {
+            item(contentType = "empty") {
               Column(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -371,7 +378,11 @@ fun BooksScreen(
               }
             }
           } else {
-            itemsIndexed(books, key = { _, it -> it.book.id }) { index, summary ->
+            itemsIndexed(
+              items = books,
+              key = { _, it -> it.book.id },
+              contentType = { _, _ -> "book" },
+            ) { index, summary ->
               BookProgressCard(
                 summary = summary,
                 colorSlot = index,
@@ -407,10 +418,11 @@ fun BooksScreen(
             }
           }
 
-          item {
+          item(contentType = "timer_card") {
             BooksStudyTimerCard(
               todayStudyMs = todayStudyMs,
-              liveStudying = liveStudying,
+              isTimerActive = isTimerActive,
+              liveStudyingState = liveStudyingState,
               onClick = onStudyTimerClick,
             )
           }
@@ -423,19 +435,20 @@ fun BooksScreen(
 @Composable
 private fun BooksStudyTimerCard(
   todayStudyMs: Long,
-  liveStudying: LiveStudyingUiState,
+  isTimerActive: Boolean,
+  liveStudyingState: StateFlow<LiveStudyingUiState>,
   onClick: () -> Unit,
 ) {
   val shape = RoundedCornerShape(20.dp)
-  val totalMs =
-    if (liveStudying.isRunningOrPaused) {
-      todayStudyMs + liveStudying.metrics.activeFocusMs
-    } else {
-      todayStudyMs
-    }
   val subtitle =
-    if (liveStudying.isRunningOrPaused) {
-      "Active: ${liveStudying.primaryClockDisplay} • Today: ${TimerMath.formatHoursMinutes(totalMs)}"
+    if (isTimerActive) {
+      val liveStudying by liveStudyingState.collectAsStateWithLifecycle()
+      if (liveStudying.isRunningOrPaused) {
+        val totalMs = todayStudyMs + liveStudying.metrics.activeFocusMs
+        "Active: ${liveStudying.primaryClockDisplay} • Today: ${TimerMath.formatHoursMinutes(totalMs)}"
+      } else {
+        "Today: ${TimerMath.formatHoursMinutes(todayStudyMs)}"
+      }
     } else {
       "Today: ${TimerMath.formatHoursMinutes(todayStudyMs)}"
     }
@@ -448,7 +461,7 @@ private fun BooksStudyTimerCard(
     modifier =
       Modifier.fillMaxWidth()
         .shadow(
-          elevation = 8.dp,
+          elevation = 4.dp,
           shape = shape,
           clip = false,
           ambientColor = AmbientShadow,
@@ -459,11 +472,7 @@ private fun BooksStudyTimerCard(
     Row(
       modifier =
         Modifier.fillMaxWidth()
-          .background(
-            Brush.horizontalGradient(
-              colors = listOf(SoftLavenderCardStart, SoftLavenderCardEnd)
-            )
-          )
+          .background(BooksTimerCardGradient)
           .padding(horizontal = 16.dp, vertical = 14.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -600,7 +609,7 @@ fun BookProgressCard(
       modifier
         .fillMaxWidth()
         .shadow(
-          elevation = 8.dp,
+          elevation = 2.dp,
           shape = cardShape,
           clip = false,
           ambientColor = AmbientShadow,

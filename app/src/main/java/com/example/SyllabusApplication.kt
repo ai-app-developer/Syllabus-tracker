@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.room.withTransaction
 import com.example.data.local.SyllabusDatabase
+import com.example.data.local.entity.ActiveTimerStateEntity
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.ActiveSessionMetadata
 import com.example.data.repository.SyllabusRepository
@@ -24,7 +25,9 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class SyllabusApplication : Application() {
@@ -41,7 +44,7 @@ class SyllabusApplication : Application() {
       dao = database.syllabusDao(),
       prefsRepo = preferencesRepository,
       runInTransaction = { block -> database.withTransaction { block() } },
-      onDataChanged = { WidgetUpdater.updateNow(this@SyllabusApplication) },
+      timerDao = database.timerDao(),
     )
   }
 
@@ -69,11 +72,12 @@ class SyllabusApplication : Application() {
     )
   }
 
-  suspend fun loadActiveSessionMetadataOnce(): ActiveSessionMetadata? {
-    val active = database.timerDao().getActiveTimerStateOnce() ?: return null
+  suspend fun loadActiveSessionMetadataOnce(
+    preloadedState: ActiveTimerStateEntity? = null,
+  ): ActiveSessionMetadata? {
+    val active = preloadedState ?: database.timerDao().getActiveTimerStateOnce() ?: return null
     val book = database.syllabusDao().getBookByIdOnce(active.bookId)
-    val chapter =
-      database.syllabusDao().getAllChaptersOnce().firstOrNull { it.id == active.chapterId }
+    val chapter = database.syllabusDao().getChapterByIdOnce(active.chapterId)
     return ActiveSessionMetadata(
       state = active,
       bookName = book?.name ?: "Study Session",
@@ -103,21 +107,23 @@ class SyllabusApplication : Application() {
   override fun onCreate() {
     super.onCreate()
     NotificationHelper.ensureNotificationChannel(this)
-    WidgetUpdater.schedulePeriodicRefresh(this)
 
     applicationScope.launch(Dispatchers.IO) {
       timerRepository.checkUnfinishedSessionOnLaunch()
     }
 
-    applicationScope.launch {
-      WidgetUpdater.updateNow(this@SyllabusApplication)
+    applicationScope.launch(Dispatchers.IO) {
+      WidgetUpdater.requestUpdate(this@SyllabusApplication)
+      delay(250L)
+      WidgetUpdater.schedulePeriodicRefresh(this@SyllabusApplication)
     }
 
     applicationScope.launch {
       syllabusRepository.observeWidgetSummaryRow()
+        .distinctUntilChanged()
         .conflate()
         .collect { summaryRow ->
-          WidgetUpdater.updateNow(
+          WidgetUpdater.requestUpdate(
             context = this@SyllabusApplication,
             precomputedSummary = summaryRow,
           )

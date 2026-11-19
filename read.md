@@ -224,10 +224,12 @@ app/src/main/java/com/example/
 - [ ] Reading Goals management screen & daily/weekly/monthly minute targets with goal completed notification
 - [ ] Longest streak & monthly activity calendar/heatmap + smart insights
 
-### Pending (Phase 3 — Granular Notification Toggles & Backup Schema v2)
+### Pending (Phase 3 — Granular Notification Toggles)
 - [ ] Granular per-type notification toggles in `MoreScreen` + scheduled daily summary & streak reminder
-- [ ] Backup & Import Schema v2 (include `readingSessions` & `readingGoals` while keeping v1 importable)
-- [ ] Widget fast-refresh hook (`WidgetUpdater.updateNow`) after every session save/edit/delete
+
+### Completed Backup & Widget Integration
+- [x] Backup & Import Schema v2 (`reading_sessions`, `session_events`, `reading_goals`, full settings including Pomodoro focus/break durations, streaming `JsonWriter`/`JsonReader`, `schemaVersion = 1..2` compatibility, Replace/Merge ID remapping & deduplication)
+- [x] Widget fast-refresh hook (`WidgetUpdater.updateNow`) after every session save/edit/delete and backup import
 
 ### Known Bugs
 - None identified.
@@ -571,6 +573,120 @@ SOLUTION: PRIMARY + BACKUP (both always scheduled together)
 
 ---
 
-## 14. Resume Prompt
+## 14. App Smoothness, SQL Analytics & Release R8 Performance Fix
 
-Read this file fully before editing to keep Room schema (`version = 2`), UI screens, RemoteViews widgets, `TimerMath`, and the Primary + Backup alarm system intact.
+### Scope Summary
+- **CI + Release Build (`/.github/workflows/blank.yml`, `app/build.gradle.kts`, `app/proguard-rules.pro`)**: Workflow invokes `./gradlew assembleRelease` and uploads `app/build/outputs/apk/release/*.apk`; release `buildType` enables `isMinifyEnabled = true` and `isShrinkResources = true` with `proguard-android-optimize.txt`, `proguard-rules.pro`, and `debugConfig` signing.
+- **Room Schema v3 & SQL Projections (`SyllabusDatabase`, `SyllabusDao`, `TimerDao`, `SyllabusRepository`)**:
+  - Non-destructive `MIGRATION_2_3` adds 4 performance indexes: `index_chapters_bookId_isCompleted` (`chapters(bookId, isCompleted)`), `index_chapters_completedAt` (`chapters(completedAt)`), `index_reading_sessions_sessionDate_startWallTimeMs` (`reading_sessions(sessionDate, startWallTimeMs)`), and `index_reading_sessions_startWallTimeMs` (`reading_sessions(startWallTimeMs)`).
+  - SQL projection/aggregate queries (`observeBookProgressRows`, `observeOverallProgressRow`, `observeCompletedTimestampsBetween`, `observeCompletedCountBefore`, `observeCompletedWithoutTimestampCount`, `observeTotalChapterCount`, `observeTodayFocusMs`, `observeTotalFocusMsBetween`, `observeBookFocusTotalsBetween`, `observeDailyFocusTotalsBetween`, `observeDistinctActiveDatesDescending`, `TimerAnalyticsCalculator.computeFromAggregates`) eliminate full-table reads from UI flows.
+  - Batched `insertBooks` / `insertChapters` in `SyllabusRepository.importBackup` and optimistic chapter add/edit/toggle/delete state updates in `SyllabusViewModel`.
+- **Scoped Compose State & Leaf Ticker Isolation (`MainActivity`, `SyllabusViewModel`, `TimerViewModel`, screens, `StableList<T>`)**:
+  - Removed root-level `uiState` / `timerUiState` collection from `MainActivity`; each route collects only its own scoped `@Immutable` `StateFlow` (`WhileSubscribed(5000)`, `.distinctUntilChanged()`, `.flowOn(Dispatchers.Default)`).
+  - Live `500ms` ticker `StateFlow` (`liveStudyingState`) is collected solely inside leaf composables (`HomeStudyTimerCard`, `BooksStudyTimerCard`, `ActiveTimerSetupBanner`, `StudyingScreen`).
+  - Added `contentType` + stable `key`s to `LazyColumn`s, hoisted `Brush` gradients and `DateTimeFormatter`s, replaced deprecated `Icons.Outlined.MenuBook` with `Icons.AutoMirrored.Outlined.MenuBook`, and lightened scrolling card shadows.
+- **Conflated Widgets, Startup & Logging (`WidgetUpdater`, `TimerForegroundService`, `SyllabusApplication`)**:
+  - Unified `WidgetUpdater.requestUpdate(...)` using `Channel.CONFLATED` + 100ms coalescing window and `distinctUntilChanged()` before `AppWidgetManager.updateAppWidget`.
+  - `.distinctUntilChanged()` on `TimerForegroundService` active metadata state, deferred WorkManager + startup work off the main thread in `SyllabusApplication.onCreate()`, and gated `Log.d` calls with `if (BuildConfig.DEBUG)`.
+
+---
+
+## 15. Backup Export / Import Full Study History Fix (`schemaVersion = 2`)
+
+### Audit Findings (Previous v1 Gaps Fixed)
+1. **Missing Tables in Export & Import**: v1 only exported/imported `books` and `chapters`, completely omitting `reading_sessions`, `session_events`, `reading_goals`, and `counts`.
+2. **Missing Settings**: v1 `BackupSettings` saved only 6 fields (`dailyGoal`, `reminderEnabled`, `reminderHour`, `reminderMinute`, `timerAlarmEnabled`, `timerVibrationEnabled`), omitting `timerPermissionChecklistShown`, `lastOpenedBookId`, and Pomodoro durations (`pomodoroFocusMinutes`, `pomodoroBreakMinutes`).
+3. **In-Memory JSON vs Streaming & Compatibility**: Replaced whole-string JSON parsing (`schemaVersion != 1` rejection) with `android.util.JsonWriter` / `android.util.JsonReader` streaming (`ByteLimitInputStream` 20 MB cap), supporting `schemaVersion in 1..2`.
+4. **Replace/Merge Integrity & Post-Import Side Effects**: Replace preserves original IDs after clearing tables (`active_timer_state`, `session_events`, `reading_sessions`, `reading_goals`, `chapters`, `books`); Merge matches books by trimmed normalized name and chapters by `(book name + chapter number)`, remaps `bookId`/`chapterId` on imported sessions & events, prevents duplicates via `sessionId` and `(startWallTimeMs, targetChapterId, activeFocusMs)`, resets stale alarms/recovery prompts (`TimerRepository.resetAfterBackupImport`), updates widgets (`WidgetUpdater.updateNow(app, force = true)`), and displays export snackbar / import result summary dialog.
+
+### Final `schemaVersion = 2` JSON Format
+```json
+{
+  "appVersion": "1.0",
+  "schemaVersion": 2,
+  "exportedAt": 1763400000000,
+  "counts": {
+    "books": 1,
+    "chapters": 1,
+    "sessions": 1,
+    "sessionEvents": 2,
+    "goals": 1
+  },
+  "settings": {
+    "dailyGoal": 2,
+    "reminderEnabled": true,
+    "reminderHour": 20,
+    "reminderMinute": 0,
+    "timerAlarmEnabled": true,
+    "timerVibrationEnabled": true,
+    "timerPermissionChecklistShown": true,
+    "lastOpenedBookId": 1,
+    "pomodoroFocusMinutes": 25,
+    "pomodoroBreakMinutes": 5
+  },
+  "books": [
+    { "id": 1, "name": "Mathematics", "createdAt": 1763310000000 }
+  ],
+  "chapters": [
+    {
+      "id": 10,
+      "bookId": 1,
+      "name": "Algebra",
+      "number": 1,
+      "isCompleted": true,
+      "completedAt": 1763315000000,
+      "createdAt": 1763310000000
+    }
+  ],
+  "sessions": [
+    {
+      "id": 1,
+      "sessionId": "uuid-1#2026-11-18",
+      "bookId": 1,
+      "bookName": "Mathematics",
+      "chapterId": 10,
+      "chapterName": "Algebra",
+      "mode": "STOPWATCH",
+      "status": "SAVED",
+      "startWallTimeMs": 1763350000000,
+      "endWallTimeMs": 1763353600000,
+      "activeFocusMs": 3600000,
+      "pauseMs": 0,
+      "breakMs": 0,
+      "activeDurationSeconds": 3600,
+      "pauseDurationSeconds": 0,
+      "goalMs": 5400000,
+      "notes": "Practice problems",
+      "sessionDate": "2026-11-18",
+      "createdAt": 1763353600000
+    }
+  ],
+  "sessionEvents": [
+    {
+      "id": 1,
+      "sessionId": "uuid-1",
+      "bookId": 1,
+      "chapterId": 10,
+      "eventType": "START",
+      "elapsedAtEventMs": 0,
+      "wallTimeMs": 1763350000000,
+      "label": null
+    }
+  ],
+  "goals": [
+    {
+      "id": 1,
+      "periodType": "DAILY",
+      "targetMinutes": 60,
+      "isActive": true,
+      "createdAt": 1763310000000
+    }
+  ]
+}
+```
+
+---
+
+## 16. Resume Prompt
+
+Read this file fully before editing to keep Room schema (`version = 3`, `MIGRATION_1_2` + `MIGRATION_2_3`), Backup Schema v2 (`schemaVersion = 1..2` streaming JSON + Replace/Merge ID remapping), Release CI/R8 config, SQL aggregate/projection DAOs, scoped ViewModel/Compose `StateFlow`s, conflated `WidgetUpdater`, RemoteViews widgets, `TimerMath`, and the Primary + Backup alarm system intact.

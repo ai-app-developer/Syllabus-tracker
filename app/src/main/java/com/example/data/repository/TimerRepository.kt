@@ -1,6 +1,8 @@
 package com.example.data.repository
 
 import android.util.Log
+import androidx.compose.runtime.Immutable
+import com.example.BuildConfig
 import com.example.data.local.dao.ReadingSessionWithMeta
 import com.example.data.local.dao.SyllabusDao
 import com.example.data.local.dao.TimerDao
@@ -9,6 +11,7 @@ import com.example.data.local.entity.ReadingSessionEntity
 import com.example.data.local.entity.SessionEventEntity
 import com.example.notifications.NotificationHelper
 import com.example.timer.AlarmFireSource
+import com.example.timer.AnalyticsPeriod
 import com.example.timer.ClockProvider
 import com.example.timer.ComputedTimerMetrics
 import com.example.timer.InMemoryAlarmDeduplicator
@@ -17,21 +20,29 @@ import com.example.timer.SystemClockProvider
 import com.example.timer.TimerAlarmDeduplicator
 import com.example.timer.TimerAlarmEventType
 import com.example.timer.TimerAlarmScheduler
+import com.example.timer.TimerAnalyticsCalculator
+import com.example.timer.TimerAnalyticsUiState
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.timer.TimerStatus
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+@Immutable
 data class AlarmOutcome(
   val eventType: TimerAlarmEventType,
   val delayMs: Long,
@@ -41,12 +52,14 @@ data class AlarmOutcome(
   val updatedState: ActiveTimerStateEntity,
 )
 
+@Immutable
 data class BootLateNotification(
   val title: String,
   val message: String,
   val notificationId: Int,
 )
 
+@Immutable
 data class ActiveSessionMetadata(
   val state: ActiveTimerStateEntity,
   val bookName: String,
@@ -57,6 +70,7 @@ data class ActiveSessionMetadata(
     get() = "Chapter $chapterNumber: $chapterName"
 }
 
+@Immutable
 data class RecoveryPromptData(
   val state: ActiveTimerStateEntity,
   val bookName: String,
@@ -89,44 +103,89 @@ class TimerRepository(
   private val _recoveryPrompt = MutableStateFlow<RecoveryPromptData?>(null)
   val recoveryPrompt: StateFlow<RecoveryPromptData?> = _recoveryPrompt.asStateFlow()
 
-  val activeTimerState: Flow<ActiveTimerStateEntity?> = timerDao.observeActiveTimerState()
+  val activeTimerState: Flow<ActiveTimerStateEntity?> =
+    timerDao.observeActiveTimerState().distinctUntilChanged()
 
   val activeSessionWithMeta: Flow<ActiveSessionMetadata?> =
-    combine(
-      timerDao.observeActiveTimerState(),
-      syllabusDao.observeBooks(),
-      syllabusDao.observeAllChapters(),
-    ) { active, books, chapters ->
-      if (active == null) {
-        null
-      } else {
-        val bookName = books.firstOrNull { it.id == active.bookId }?.name ?: "Unknown Book"
-        val chapter = chapters.firstOrNull { it.id == active.chapterId }
-        ActiveSessionMetadata(
-          state = active,
-          bookName = bookName,
-          chapterName = chapter?.name ?: "Chapter",
-          chapterNumber = chapter?.number ?: 1,
-        )
+    timerDao.observeActiveSessionWithMeta()
+      .distinctUntilChanged()
+      .map { row ->
+        row?.let {
+          ActiveSessionMetadata(
+            state = it.state,
+            bookName = it.bookName ?: "Unknown Book",
+            chapterName = it.chapterName ?: "Chapter",
+            chapterNumber = it.chapterNumber ?: 1,
+          )
+        }
       }
-    }
+      .flowOn(Dispatchers.Default)
 
   val allSessionsWithMeta: Flow<List<ReadingSessionWithMeta>> =
-    timerDao.observeAllSessionsWithMeta()
+    timerDao.observeAllSessionsWithMeta().distinctUntilChanged()
 
   val todayFocusMs: Flow<Long> =
-    timerDao.observeTodayFocusMs(LocalDate.now(zoneId).toString())
+    timerDao.observeTodayFocusMs(LocalDate.now(zoneId).toString()).distinctUntilChanged()
 
   fun observeSessionEvents(sessionId: String): Flow<List<SessionEventEntity>> =
-    timerDao.observeEventsForSession(sessionId)
+    timerDao.observeEventsForSession(sessionId).distinctUntilChanged()
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun observeAnalytics(periodFlow: Flow<AnalyticsPeriod>): Flow<TimerAnalyticsUiState> {
+    return periodFlow
+      .distinctUntilChanged()
+      .flatMapLatest { period ->
+        val today = LocalDate.now(zoneId)
+        val todayStr = today.toString()
+        val bounds = TimerAnalyticsCalculator.periodBounds(period, today)
+        val startStr = bounds.start.toString()
+        val endStr = bounds.end.toString()
+        val prevStartStr = bounds.prevStart.toString()
+        val prevEndStr = bounds.prevEnd.toString()
+
+        val totalsFlow =
+          combine(
+            timerDao.observeTodayFocusMs(todayStr).distinctUntilChanged(),
+            timerDao.observeTotalFocusMsBetween(startStr, endStr).distinctUntilChanged(),
+            timerDao.observeTotalFocusMsBetween(prevStartStr, prevEndStr).distinctUntilChanged(),
+          ) { todayMs, periodMs, prevPeriodMs ->
+            Triple(todayMs, periodMs, prevPeriodMs)
+          }
+
+        val breakdownFlow =
+          combine(
+            timerDao.observeDailyFocusTotalsBetween(startStr, endStr).distinctUntilChanged(),
+            timerDao.observeBookFocusTotalsBetween(startStr, endStr).distinctUntilChanged(),
+            timerDao.observeDistinctActiveDatesDescending().distinctUntilChanged(),
+          ) { dailyRows, bookRows, activeDatesDesc ->
+            Triple(dailyRows, bookRows, activeDatesDesc)
+          }
+
+        combine(totalsFlow, breakdownFlow) {
+          (todayMs, periodMs, prevPeriodMs),
+          (dailyRows, bookRows, activeDatesDesc) ->
+          TimerAnalyticsCalculator.computeFromAggregates(
+            period = period,
+            todayTotalMs = todayMs,
+            periodTotalMs = periodMs,
+            previousPeriodTotalMs = prevPeriodMs,
+            dailyRows = dailyRows,
+            bookRows = bookRows,
+            activeDatesDesc = activeDatesDesc,
+            today = today,
+          )
+        }
+      }
+      .distinctUntilChanged()
+      .flowOn(Dispatchers.Default)
+  }
 
   suspend fun checkUnfinishedSessionOnLaunch() {
     mutex.withLock {
       if (sessionStartedInCurrentProcess) return
       val existing = timerDao.getActiveTimerStateOnce() ?: return
       val book = syllabusDao.getBookByIdOnce(existing.bookId)
-      val chapters = syllabusDao.getAllChaptersOnce()
-      val chapter = chapters.firstOrNull { it.id == existing.chapterId }
+      val chapter = syllabusDao.getChapterByIdOnce(existing.chapterId)
       if (book == null || chapter == null) {
         onSyncAlarm(null)
         timerDao.clearActiveTimerState()
@@ -529,11 +588,11 @@ class TimerRepository(
     return mutex.withLock {
       val current = timerDao.getActiveTimerStateOnce()
       if (current == null || current.sessionId != sessionId) {
-        Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+        if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
         return@withLock null
       }
       if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) {
-        Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+        if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
         onSyncAlarm(null)
         return@withLock null
       }
@@ -556,11 +615,11 @@ class TimerRepository(
               current.pomodoroCycle != phaseIndex ||
               current.focusDurationMs <= 0L
           ) {
-            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
           if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
-            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
 
@@ -609,11 +668,11 @@ class TimerRepository(
               current.pomodoroCycle != phaseIndex ||
               current.breakDurationMs <= 0L
           ) {
-            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
           if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
-            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
 
@@ -645,11 +704,11 @@ class TimerRepository(
         TimerAlarmEventType.GOAL_REACHED -> {
           val goalMs = current.goalMs
           if (goalMs == null || current.goalNotified || current.status != TimerStatus.RUNNING) {
-            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
           if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
-            Log.d(ALARM_TAG, "skipped duplicate $eventKey")
+            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
             return@withLock null
           }
 
@@ -942,8 +1001,30 @@ class TimerRepository(
     onSessionsChanged()
   }
 
+  suspend fun resetAfterBackupImport(wasReplaceMode: Boolean) {
+    mutex.withLock {
+      if (wasReplaceMode) {
+        sessionStartedInCurrentProcess = false
+        _recoveryPrompt.value = null
+        alarmDeduplicator.clearAll()
+        onSyncAlarm(null)
+        onStopService()
+      } else {
+        val active = timerDao.getActiveTimerStateOnce()
+        if (active == null) {
+          alarmDeduplicator.clearAll()
+          onSyncAlarm(null)
+          onStopService()
+        } else {
+          onSyncAlarm(active)
+          onSyncService()
+        }
+      }
+    }
+  }
+
   fun observeSessionCount(): Flow<Int> =
-    timerDao.observeAllSessionsWithMeta().map { it.size }
+    timerDao.observeSessionCount().distinctUntilChanged()
 
   private suspend fun persistSessionAndCleanupLocked(
     state: ActiveTimerStateEntity,

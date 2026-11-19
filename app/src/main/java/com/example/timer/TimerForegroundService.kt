@@ -17,6 +17,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -93,18 +94,21 @@ class TimerForegroundService : Service() {
     if (stateObserverJob?.isActive != true) {
       stateObserverJob =
         serviceScope.launch {
-          app.database.timerDao().observeActiveTimerState().collectLatest { state ->
-            if (state == null) {
-              boundaryJob?.cancel()
-              stopForeground(STOP_FOREGROUND_REMOVE)
-              NotificationHelper.cancelOngoingTimerNotification(this@TimerForegroundService)
-              stopSelf()
-              return@collectLatest
+          app.database.timerDao()
+            .observeActiveTimerState()
+            .distinctUntilChanged()
+            .collectLatest { state ->
+              if (state == null) {
+                boundaryJob?.cancel()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                NotificationHelper.cancelOngoingTimerNotification(this@TimerForegroundService)
+                stopSelf()
+                return@collectLatest
+              }
+              val meta = app.loadActiveSessionMetadataOnce(preloadedState = state) ?: return@collectLatest
+              updateOngoingNotification(meta)
+              schedulePrimaryBoundaryAlarm(meta.state)
             }
-            val meta = app.loadActiveSessionMetadataOnce() ?: return@collectLatest
-            updateOngoingNotification(meta)
-            schedulePrimaryBoundaryAlarm(meta.state)
-          }
         }
     }
 

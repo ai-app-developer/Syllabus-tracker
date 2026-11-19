@@ -48,6 +48,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -69,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.timer.SessionEventType
 import com.example.timer.TimerMath
@@ -95,12 +97,15 @@ import com.example.ui.theme.VibrantGreen
 import com.example.ui.theme.VioletGradientBottom
 import com.example.ui.theme.VioletGradientTop
 import com.example.ui.viewmodel.LiveStudyingUiState
+import kotlinx.coroutines.flow.StateFlow
 
 private val WarmAmberText = Color(0xFFD97706)
+private val StudyingStopGradient =
+  Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
 
 @Composable
 fun StudyingScreen(
-  liveState: LiveStudyingUiState,
+  liveStudyingState: StateFlow<LiveStudyingUiState>,
   innerPadding: PaddingValues,
   onMinimizeBack: () -> Unit,
   onTogglePauseResume: () -> Unit,
@@ -114,6 +119,7 @@ fun StudyingScreen(
 ) {
   BackHandler { onMinimizeBack() }
 
+  val liveState by liveStudyingState.collectAsStateWithLifecycle()
   var menuExpanded by remember { mutableStateOf(false) }
   val activeMeta = liveState.activeMeta
 
@@ -492,10 +498,7 @@ fun StudyingScreen(
           ) {
             Box(
               modifier =
-                Modifier.fillMaxSize()
-                  .background(
-                    Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
-                  ),
+                Modifier.fillMaxSize().background(StudyingStopGradient),
               contentAlignment = Alignment.Center,
             ) {
               Icon(
@@ -610,8 +613,14 @@ fun StudyingScreen(
         }
       }
 
-      val laps = liveState.events.filter { it.eventType == SessionEventType.LAP }
-      if (laps.isNotEmpty()) {
+      val recentLaps =
+        remember(liveState.events) {
+          val filtered = liveState.events.filter { it.eventType == SessionEventType.LAP }
+          filtered.size to filtered.reversed().take(5)
+        }
+      val totalLapCount = recentLaps.first
+      val displayedLaps = recentLaps.second
+      if (totalLapCount > 0) {
         Spacer(modifier = Modifier.height(14.dp))
         val lapsShape = RoundedCornerShape(20.dp)
         Surface(
@@ -630,34 +639,36 @@ fun StudyingScreen(
         ) {
           Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
             Text(
-              text = "Laps (${laps.size})",
+              text = "Laps ($totalLapCount)",
               style = MaterialTheme.typography.labelLarge,
               color = TextSecondary,
             )
             Spacer(modifier = Modifier.height(8.dp))
-            laps.reversed().take(5).forEachIndexed { idx, lap ->
-              if (idx > 0) {
-                HorizontalDivider(
-                  thickness = 1.dp,
-                  color = HairlineBorder,
-                  modifier = Modifier.padding(vertical = 6.dp),
-                )
-              }
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-              ) {
-                Text(
-                  text = lap.label ?: "Lap",
-                  style = MaterialTheme.typography.bodyMedium,
-                  color = TextPrimary,
-                )
-                Text(
-                  text = TimerMath.formatHms(lap.elapsedAtEventMs),
-                  style = MaterialTheme.typography.bodyMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = PrimaryIndigo,
-                )
+            displayedLaps.forEachIndexed { idx, lap ->
+              key(lap.id) {
+                if (idx > 0) {
+                  HorizontalDivider(
+                    thickness = 1.dp,
+                    color = HairlineBorder,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                  )
+                }
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                  Text(
+                    text = lap.label ?: "Lap",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextPrimary,
+                  )
+                  Text(
+                    text = TimerMath.formatHms(lap.elapsedAtEventMs),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = PrimaryIndigo,
+                  )
+                }
               }
             }
           }

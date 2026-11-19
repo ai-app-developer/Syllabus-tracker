@@ -25,7 +25,7 @@ import com.example.data.local.entity.SessionEventEntity
       ReadingGoalEntity::class,
       ActiveTimerStateEntity::class,
     ],
-  version = 2,
+  version = 3,
   exportSchema = false,
 )
 abstract class SyllabusDatabase : RoomDatabase() {
@@ -159,6 +159,24 @@ abstract class SyllabusDatabase : RoomDatabase() {
         }
       }
 
+    val MIGRATION_2_3 =
+      object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_chapters_bookId_isCompleted` ON `chapters` (`bookId`, `isCompleted`)"
+          )
+          db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_chapters_completedAt` ON `chapters` (`completedAt`)"
+          )
+          db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_reading_sessions_sessionDate_startWallTimeMs` ON `reading_sessions` (`sessionDate`, `startWallTimeMs`)"
+          )
+          db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_reading_sessions_startWallTimeMs` ON `reading_sessions` (`startWallTimeMs`)"
+          )
+        }
+      }
+
     @Volatile
     private var INSTANCE: SyllabusDatabase? = null
 
@@ -172,7 +190,7 @@ abstract class SyllabusDatabase : RoomDatabase() {
                 "syllabus_tracker.db",
               )
               .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-              .addMigrations(MIGRATION_1_2)
+              .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
               .build()
               .also { INSTANCE = it }
         }

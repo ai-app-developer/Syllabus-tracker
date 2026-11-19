@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.example.BuildConfig
 import com.example.MainActivity
 import com.example.SyllabusApplication
 import com.example.data.local.entity.ActiveTimerStateEntity
@@ -203,14 +204,16 @@ object TimerAlarmScheduler {
             pi,
           )
         }
-        val formattedTime =
-          Instant.ofEpochMilli(target.triggerWallMs)
-            .atZone(ZoneId.systemDefault())
-            .format(logTimeFormatter)
-        Log.d(
-          TAG,
-          "scheduled primary+backup ${target.eventType.name} at $formattedTime (backup +2000ms at $backupTriggerWallMs)",
-        )
+        if (BuildConfig.DEBUG) {
+          val formattedTime =
+            Instant.ofEpochMilli(target.triggerWallMs)
+              .atZone(ZoneId.systemDefault())
+              .format(logTimeFormatter)
+          Log.d(
+            TAG,
+            "scheduled primary+backup ${target.eventType.name} at $formattedTime (backup +2000ms at $backupTriggerWallMs)",
+          )
+        }
       }.onFailure { err ->
         Log.w(TAG, "Failed scheduling ${target.eventType.name}", err)
       }

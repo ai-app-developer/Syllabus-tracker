@@ -23,11 +23,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -66,13 +66,12 @@ import com.example.ui.theme.ProgressTrack
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import kotlin.math.roundToInt
+import com.example.ui.viewmodel.BookDetailUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BookDetailScreen(
-  book: BookEntity?,
-  chapters: List<ChapterEntity>,
+  state: BookDetailUiState,
   onMarkOpened: () -> Unit,
   onBackClick: () -> Unit,
   onEditBookClick: (BookEntity) -> Unit,
@@ -82,17 +81,19 @@ fun BookDetailScreen(
   onEditChapterClick: (ChapterEntity) -> Unit,
   onDeleteChapterClick: (ChapterEntity) -> Unit,
 ) {
+  val book = state.book
+  val chapters = state.chapters
+
   LaunchedEffect(book?.id) {
     if (book != null) {
       onMarkOpened()
     }
   }
 
-  val completedCount = chapters.count { it.isCompleted }
-  val totalCount = chapters.size
-  val percentage =
-    if (totalCount == 0) 0 else ((completedCount * 100f) / totalCount).roundToInt()
-  val fraction = if (totalCount == 0) 0f else completedCount.toFloat() / totalCount.toFloat()
+  val completedCount = state.completedCount
+  val totalCount = state.totalCount
+  val percentage = state.percentage
+  val fraction = state.fraction
 
   Scaffold(
     containerColor = AppBackground,
@@ -237,7 +238,7 @@ fun BookDetailScreen(
                   contentAlignment = Alignment.Center,
                 ) {
                   Icon(
-                    imageVector = Icons.Outlined.MenuBook,
+                    imageVector = Icons.AutoMirrored.Outlined.MenuBook,
                     contentDescription = null,
                     tint = PrimaryIndigo,
                     modifier = Modifier.size(28.dp),
@@ -275,7 +276,11 @@ fun BookDetailScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 12.dp),
           ) {
-            items(chapters, key = { it.id }) { chapter ->
+            items(
+              items = chapters,
+              key = { it.id },
+              contentType = { "chapter" },
+            ) { chapter ->
               ChapterItemCard(
                 chapter = chapter,
                 onToggle = { onToggleChapter(chapter) },

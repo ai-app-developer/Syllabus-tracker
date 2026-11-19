@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.data.backup.BackupImportMode
+import com.example.data.backup.BackupImportResult
 import com.example.data.backup.SyllabusBackup
 import com.example.data.local.entity.BookEntity
 import com.example.ui.theme.CardSurface
@@ -81,7 +82,10 @@ fun ImportBackupConfirmDialog(
       Column(modifier = Modifier.fillMaxWidth()) {
         Text(
           text =
-            "Found ${backup.books.size} ${if (backup.books.size == 1) "book" else "books"} and ${backup.chapters.size} ${if (backup.chapters.size == 1) "chapter" else "chapters"}. Choose how to import:",
+            "Found ${backup.books.size} ${if (backup.books.size == 1) "book" else "books"}, " +
+              "${backup.chapters.size} ${if (backup.chapters.size == 1) "chapter" else "chapters"}, " +
+              "${backup.sessions.size} ${if (backup.sessions.size == 1) "session" else "sessions"}, and " +
+              "${backup.goals.size} ${if (backup.goals.size == 1) "goal" else "goals"}. Choose how to import:",
           style = MaterialTheme.typography.bodyMedium,
           color = TextSecondary,
         )
@@ -111,6 +115,53 @@ fun ImportBackupConfirmDialog(
         modifier = Modifier.testTag("import_cancel_button"),
       ) {
         Text("Cancel", color = TextSecondary)
+      }
+    },
+  )
+}
+
+@Composable
+fun ImportBackupResultDialog(
+  result: BackupImportResult,
+  onDismiss: () -> Unit,
+) {
+  val summaryText =
+    buildString {
+      append(
+        "Imported: ${result.booksImported} books, ${result.chaptersImported} chapters, " +
+          "${result.sessionsImported} sessions, ${result.goalsImported} goals"
+      )
+      if (result.mode == BackupImportMode.MERGE && result.skippedDuplicates > 0) {
+        append("\nSkipped duplicates: ${result.skippedDuplicates}")
+      }
+    }
+
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = CardSurface,
+    shape = RoundedCornerShape(16.dp),
+    title = {
+      Text(
+        text = "Import Complete",
+        style = MaterialTheme.typography.titleLarge,
+        color = TextPrimary,
+      )
+    },
+    text = {
+      Text(
+        text = summaryText,
+        style = MaterialTheme.typography.bodyMedium,
+        color = TextSecondary,
+      )
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        modifier = Modifier.testTag("import_result_ok_button"),
+      ) {
+        Text("OK", color = Color.White)
       }
     },
   )

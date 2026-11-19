@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -74,7 +75,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.HistoryDateFilter
 import com.example.ui.viewmodel.HistorySortOrder
-import com.example.ui.viewmodel.TimerUiState
+import com.example.ui.viewmodel.ReadingHistoryUiState
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -82,9 +83,14 @@ import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 
+private val HISTORY_DATE_FORMATTER: DateTimeFormatter =
+  DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.getDefault())
+private val HISTORY_TIME_FORMATTER: DateTimeFormatter =
+  DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+
 @Composable
 fun ReadingHistoryScreen(
-  uiState: TimerUiState,
+  state: ReadingHistoryUiState,
   innerPadding: PaddingValues,
   observeEvents: (String) -> Flow<List<SessionEventEntity>>,
   onBackClick: () -> Unit,
@@ -102,7 +108,7 @@ fun ReadingHistoryScreen(
   var selectedSessionForDetail by remember { mutableStateOf<ReadingSessionWithMeta?>(null) }
   var pendingDeleteSession by remember { mutableStateOf<ReadingSessionWithMeta?>(null) }
 
-  val filteredSessions = uiState.filteredHistorySessions
+  val filteredSessions = state.filteredSessions
   val detailEvents by
     remember(selectedSessionForDetail?.session?.sessionId) {
       val sid = selectedSessionForDetail?.session?.sessionId
@@ -143,7 +149,7 @@ fun ReadingHistoryScreen(
           modifier = Modifier.size(48.dp).testTag("history_search_button"),
         ) {
           Icon(
-            imageVector = if (uiState.historyFilter.isSearchActive) Icons.Default.Close else Icons.Default.Search,
+            imageVector = if (state.historyFilter.isSearchActive) Icons.Default.Close else Icons.Default.Search,
             contentDescription = "Search sessions",
             tint = TextPrimary,
           )
@@ -169,8 +175,8 @@ fun ReadingHistoryScreen(
                 text = {
                   Text(
                     text = order.label,
-                    color = if (uiState.historyFilter.sortOrder == order) PrimaryIndigo else TextPrimary,
-                    fontWeight = if (uiState.historyFilter.sortOrder == order) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (state.historyFilter.sortOrder == order) PrimaryIndigo else TextPrimary,
+                    fontWeight = if (state.historyFilter.sortOrder == order) FontWeight.SemiBold else FontWeight.Normal,
                   )
                 },
                 onClick = {
@@ -183,10 +189,10 @@ fun ReadingHistoryScreen(
         }
       }
 
-      if (uiState.historyFilter.isSearchActive) {
+      if (state.historyFilter.isSearchActive) {
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedTextField(
-          value = uiState.historyFilter.searchQuery,
+          value = state.historyFilter.searchQuery,
           onValueChange = onSearchQueryChange,
           placeholder = { Text("Search book, chapter, or notes", color = TextSecondary) },
           singleLine = true,
@@ -209,29 +215,31 @@ fun ReadingHistoryScreen(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         HistoryDateFilter.entries.forEach { df ->
-          FilterChip(
-            selected = uiState.historyFilter.dateFilter == df,
-            onClick = { onSelectDateFilter(df) },
-            label = { Text(df.label) },
-            colors =
-              FilterChipDefaults.filterChipColors(
-                selectedContainerColor = PrimaryIndigo,
-                selectedLabelColor = Color.White,
-                containerColor = CardSurface,
-                labelColor = TextPrimary,
-              ),
-          )
+          key(df) {
+            FilterChip(
+              selected = state.historyFilter.dateFilter == df,
+              onClick = { onSelectDateFilter(df) },
+              label = { Text(df.label) },
+              colors =
+                FilterChipDefaults.filterChipColors(
+                  selectedContainerColor = PrimaryIndigo,
+                  selectedLabelColor = Color.White,
+                  containerColor = CardSurface,
+                  labelColor = TextPrimary,
+                ),
+            )
+          }
         }
       }
 
-      if (uiState.books.isNotEmpty()) {
+      if (state.books.isNotEmpty()) {
         Spacer(modifier = Modifier.height(4.dp))
         Row(
           modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           FilterChip(
-            selected = uiState.historyFilter.selectedBookId == null,
+            selected = state.historyFilter.selectedBookId == null,
             onClick = { onSelectBookFilter(null) },
             label = { Text("All Books") },
             colors =
@@ -242,23 +250,25 @@ fun ReadingHistoryScreen(
                 labelColor = TextSecondary,
               ),
           )
-          uiState.books.forEach { book ->
-            FilterChip(
-              selected = uiState.historyFilter.selectedBookId == book.id,
-              onClick = { onSelectBookFilter(book.id) },
-              label = { Text(book.name, maxLines = 1) },
-              colors =
-                FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = LightIndigoTint,
-                  selectedLabelColor = PrimaryIndigo,
-                  containerColor = CardSurface,
-                  labelColor = TextSecondary,
-                ),
-            )
+          state.books.forEach { book ->
+            key(book.id) {
+              FilterChip(
+                selected = state.historyFilter.selectedBookId == book.id,
+                onClick = { onSelectBookFilter(book.id) },
+                label = { Text(book.name, maxLines = 1) },
+                colors =
+                  FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = LightIndigoTint,
+                    selectedLabelColor = PrimaryIndigo,
+                    containerColor = CardSurface,
+                    labelColor = TextSecondary,
+                  ),
+              )
+            }
           }
         }
 
-        val chaptersForFilter = uiState.historyChaptersForFilter
+        val chaptersForFilter = state.chaptersForFilter
         if (chaptersForFilter.isNotEmpty()) {
           Spacer(modifier = Modifier.height(4.dp))
           Row(
@@ -266,7 +276,7 @@ fun ReadingHistoryScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             FilterChip(
-              selected = uiState.historyFilter.selectedChapterId == null,
+              selected = state.historyFilter.selectedChapterId == null,
               onClick = { onSelectChapterFilter(null) },
               label = { Text("All Chapters") },
               colors =
@@ -278,18 +288,20 @@ fun ReadingHistoryScreen(
                 ),
             )
             chaptersForFilter.forEach { ch ->
-              FilterChip(
-                selected = uiState.historyFilter.selectedChapterId == ch.id,
-                onClick = { onSelectChapterFilter(ch.id) },
-                label = { Text("Ch ${ch.number}: ${ch.name}", maxLines = 1) },
-                colors =
-                  FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = LightIndigoTint,
-                    selectedLabelColor = PrimaryIndigo,
-                    containerColor = CardSurface,
-                    labelColor = TextSecondary,
-                  ),
-              )
+              key(ch.id) {
+                FilterChip(
+                  selected = state.historyFilter.selectedChapterId == ch.id,
+                  onClick = { onSelectChapterFilter(ch.id) },
+                  label = { Text("Ch ${ch.number}: ${ch.name}", maxLines = 1) },
+                  colors =
+                    FilterChipDefaults.filterChipColors(
+                      selectedContainerColor = LightIndigoTint,
+                      selectedLabelColor = PrimaryIndigo,
+                      containerColor = CardSurface,
+                      labelColor = TextSecondary,
+                    ),
+                )
+              }
             }
           }
         }
@@ -323,7 +335,7 @@ fun ReadingHistoryScreen(
             Spacer(modifier = Modifier.height(14.dp))
             Text(
               text =
-                if (uiState.allSessions.isEmpty()) "No Reading Sessions Yet"
+                if (!state.hasAnySessions) "No Reading Sessions Yet"
                 else "No Matching Sessions",
               style = MaterialTheme.typography.titleLarge,
               color = TextPrimary,
@@ -331,7 +343,7 @@ fun ReadingHistoryScreen(
             Spacer(modifier = Modifier.height(6.dp))
             Text(
               text =
-                if (uiState.allSessions.isEmpty()) {
+                if (!state.hasAnySessions) {
                   "Start the Study Timer to record focus time and build your reading history."
                 } else {
                   "Try clearing your search or selecting a wider date filter."
@@ -340,7 +352,7 @@ fun ReadingHistoryScreen(
               color = TextSecondary,
               textAlign = TextAlign.Center,
             )
-            if (uiState.allSessions.isEmpty()) {
+            if (!state.hasAnySessions) {
               Spacer(modifier = Modifier.height(18.dp))
               Button(
                 onClick = onStartNewSession,
@@ -359,7 +371,11 @@ fun ReadingHistoryScreen(
           verticalArrangement = Arrangement.spacedBy(10.dp),
           contentPadding = PaddingValues(bottom = 20.dp),
         ) {
-          items(filteredSessions, key = { it.session.id }) { item ->
+          items(
+            items = filteredSessions,
+            key = { it.session.id },
+            contentType = { "session" },
+          ) { item ->
             ReadingSessionCard(
               item = item,
               onClick = { selectedSessionForDetail = item },
@@ -433,13 +449,11 @@ private fun ReadingSessionCard(
   item: ReadingSessionWithMeta,
   onClick: () -> Unit,
 ) {
-  val zone = ZoneId.systemDefault()
-  val dateFormatter = remember { DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.getDefault()) }
-  val timeFormatter = remember { DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()) }
-  val dateLabel =
-    Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(zone).format(dateFormatter)
-  val startLabel =
-    Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(zone).format(timeFormatter)
+  val (dateLabel, startLabel) =
+    remember(item.session.startWallTimeMs) {
+      val zoned = Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(ZoneId.systemDefault())
+      zoned.format(HISTORY_DATE_FORMATTER) to zoned.format(HISTORY_TIME_FORMATTER)
+    }
 
   val focusPct =
     remember(item.session.activeFocusMs, item.session.pauseMs) {

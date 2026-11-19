@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.os.SystemClock
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.SyllabusApplication
@@ -14,11 +15,11 @@ import com.example.data.repository.RecoveryPromptData
 import com.example.data.repository.TimerRepository
 import com.example.timer.AnalyticsPeriod
 import com.example.timer.ComputedTimerMetrics
-import com.example.timer.TimerAnalyticsCalculator
 import com.example.timer.TimerAnalyticsUiState
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.timer.TimerStatus
+import com.example.ui.model.StableList
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -33,9 +34,12 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -54,6 +58,7 @@ enum class HistorySortOrder(val label: String) {
   LONGEST("Longest Duration"),
 }
 
+@Immutable
 data class TimerSetupState(
   val selectedBookId: Long? = null,
   val selectedChapterId: Long? = null,
@@ -64,6 +69,7 @@ data class TimerSetupState(
   val notes: String = "",
 )
 
+@Immutable
 data class LiveStudyingUiState(
   val activeMeta: ActiveSessionMetadata? = null,
   val metrics: ComputedTimerMetrics =
@@ -76,7 +82,7 @@ data class LiveStudyingUiState(
       focusPercent = 100,
       progressFraction = 0f,
     ),
-  val events: List<SessionEventEntity> = emptyList(),
+  val events: StableList<SessionEventEntity> = StableList(),
 ) {
   val isRunningOrPaused: Boolean
     get() = activeMeta != null
@@ -101,6 +107,7 @@ data class LiveStudyingUiState(
     }
 }
 
+@Immutable
 data class HistoryFilterState(
   val searchQuery: String = "",
   val isSearchActive: Boolean = false,
@@ -110,44 +117,210 @@ data class HistoryFilterState(
   val sortOrder: HistorySortOrder = HistorySortOrder.NEWEST,
 )
 
-data class TimerUiState(
-  val books: List<BookEntity> = emptyList(),
-  val chaptersForSelectedBook: List<ChapterEntity> = emptyList(),
-  val allChapters: List<ChapterEntity> = emptyList(),
+@Immutable
+data class TimerSetupUiState(
+  val books: StableList<BookEntity> = StableList(),
+  val chaptersForSelectedBook: StableList<ChapterEntity> = StableList(),
   val setup: TimerSetupState = TimerSetupState(),
-  val liveStudying: LiveStudyingUiState = LiveStudyingUiState(),
-  val recoveryPrompt: RecoveryPromptData? = null,
-  val allSessions: List<ReadingSessionWithMeta> = emptyList(),
+)
+
+@Immutable
+data class ReadingHistoryUiState(
+  val books: StableList<BookEntity> = StableList(),
+  val chaptersForFilter: StableList<ChapterEntity> = StableList(),
+  val filteredSessions: StableList<ReadingSessionWithMeta> = StableList(),
+  val hasAnySessions: Boolean = false,
   val historyFilter: HistoryFilterState = HistoryFilterState(),
-  val analytics: TimerAnalyticsUiState = TimerAnalyticsUiState(),
-) {
-  val historyChaptersForFilter: List<ChapterEntity>
-    get() {
-      val bookId = historyFilter.selectedBookId ?: return emptyList()
-      return allChapters
-        .filter { it.bookId == bookId }
-        .sortedWith(compareBy({ it.number }, { it.id }))
+)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class TimerViewModel(application: Application) : AndroidViewModel(application) {
+  private val app = application as SyllabusApplication
+  private val timerRepo: TimerRepository = app.timerRepository
+  private val syllabusRepo = app.syllabusRepository
+
+  private val setupState = MutableStateFlow(TimerSetupState())
+  private val historyFilterState = MutableStateFlow(HistoryFilterState())
+  private val analyticsPeriodState = MutableStateFlow(AnalyticsPeriod.THIS_WEEK)
+
+  private val _events = MutableSharedFlow<TimerUiEvent>(extraBufferCapacity = 8)
+  val events: SharedFlow<TimerUiEvent> = _events.asSharedFlow()
+
+  val recoveryPrompt: StateFlow<RecoveryPromptData?> = timerRepo.recoveryPrompt
+
+  init {
+    viewModelScope.launch {
+      syllabusRepo
+        .observePreferences()
+        .map { it.pomodoroFocusMinutes to it.pomodoroBreakMinutes }
+        .distinctUntilChanged()
+        .collect { (focus, brk) ->
+          setupState.update { current ->
+            current.copy(
+              pomodoroFocusMinutes = focus,
+              pomodoroBreakMinutes = brk,
+            )
+          }
+        }
+    }
+  }
+
+  val isTimerActive: StateFlow<Boolean> =
+    timerRepo.activeTimerState
+      .map { it != null }
+      .distinctUntilChanged()
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false,
+      )
+
+  val todayStudyMs: StateFlow<Long> =
+    timerRepo.todayFocusMs
+      .distinctUntilChanged()
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0L,
+      )
+
+  private val tickerFlow: Flow<Long> =
+    timerRepo.activeTimerState.flatMapLatest { state ->
+      if (state == null || state.status == TimerStatus.PAUSED || state.status == TimerStatus.STOP_SUMMARY) {
+        flowOf(SystemClock.elapsedRealtime())
+      } else {
+        flow {
+          while (true) {
+            emit(SystemClock.elapsedRealtime())
+            delay(500L)
+          }
+        }
+      }
     }
 
-  val filteredHistorySessions: List<ReadingSessionWithMeta>
-    get() {
+  private val activeEventsFlow: Flow<List<SessionEventEntity>> =
+    timerRepo.activeTimerState
+      .map { it?.sessionId }
+      .distinctUntilChanged()
+      .flatMapLatest { sessionId ->
+        if (sessionId == null) flowOf(emptyList()) else timerRepo.observeSessionEvents(sessionId)
+      }
+
+  val liveStudyingState: StateFlow<LiveStudyingUiState> =
+    combine(
+      timerRepo.activeSessionWithMeta,
+      tickerFlow,
+      activeEventsFlow,
+    ) { meta, nowElapsed, sessionEvents ->
+      if (meta == null) {
+        LiveStudyingUiState()
+      } else {
+        val nowWall = System.currentTimeMillis()
+        val metrics = TimerMath.computeMetrics(meta.state, nowElapsed, nowWall)
+        LiveStudyingUiState(
+          activeMeta = meta,
+          metrics = metrics,
+          events = StableList(sessionEvents),
+        )
+      }
+    }
+      .distinctUntilChanged()
+      .flowOn(Dispatchers.Default)
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = LiveStudyingUiState(),
+      )
+
+  val analyticsUiState: StateFlow<TimerAnalyticsUiState> =
+    timerRepo.observeAnalytics(analyticsPeriodState)
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = TimerAnalyticsUiState(),
+      )
+
+  private val resolvedBookIdFlow: Flow<Pair<List<BookEntity>, Long?>> =
+    combine(
+      syllabusRepo.observeBookSummaries(),
+      syllabusRepo.observePreferences(),
+      setupState.map { it.selectedBookId }.distinctUntilChanged(),
+    ) { summaries, prefs, explicitBookId ->
+      val rawBooks = summaries.map { it.book }
+      val preferred =
+        explicitBookId?.takeIf { id -> rawBooks.any { it.id == id } }
+          ?: summaries.firstOrNull { it.book.id == prefs.lastOpenedBookId && it.nextIncompleteChapter != null }?.book?.id
+          ?: summaries.firstOrNull { it.nextIncompleteChapter != null }?.book?.id
+          ?: summaries.firstOrNull { it.book.id == prefs.lastOpenedBookId }?.book?.id
+          ?: rawBooks.firstOrNull()?.id
+      rawBooks to preferred
+    }.distinctUntilChanged()
+
+  private val selectedBookChaptersFlow: Flow<List<ChapterEntity>> =
+    resolvedBookIdFlow
+      .map { it.second }
+      .distinctUntilChanged()
+      .flatMapLatest { bookId ->
+        if (bookId == null) flowOf(emptyList()) else syllabusRepo.observeChaptersForBook(bookId)
+      }
+
+  val setupUiState: StateFlow<TimerSetupUiState> =
+    combine(resolvedBookIdFlow, selectedBookChaptersFlow, setupState) {
+      (rawBooks, preferredBookId),
+      chaptersForBook,
+      setup ->
+      val preferredChapterId =
+        setup.selectedChapterId?.takeIf { cid -> chaptersForBook.any { it.id == cid } }
+          ?: chaptersForBook.firstOrNull { !it.isCompleted }?.id
+          ?: chaptersForBook.firstOrNull()?.id
+      TimerSetupUiState(
+        books = StableList(rawBooks),
+        chaptersForSelectedBook = StableList(chaptersForBook),
+        setup =
+          setup.copy(
+            selectedBookId = preferredBookId,
+            selectedChapterId = preferredChapterId,
+          ),
+      )
+    }
+      .distinctUntilChanged()
+      .flowOn(Dispatchers.Default)
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = TimerSetupUiState(),
+      )
+
+  private val historyFilterChaptersFlow: Flow<List<ChapterEntity>> =
+    historyFilterState
+      .map { it.selectedBookId }
+      .distinctUntilChanged()
+      .flatMapLatest { bookId ->
+        if (bookId == null) flowOf(emptyList()) else syllabusRepo.observeChaptersForBook(bookId)
+      }
+
+  val historyUiState: StateFlow<ReadingHistoryUiState> =
+    combine(
+      syllabusRepo.observeBooks(),
+      historyFilterChaptersFlow,
+      timerRepo.allSessionsWithMeta,
+      historyFilterState,
+    ) { books, chaptersForFilter, sessions, filter ->
       val zone = ZoneId.systemDefault()
       val today = LocalDate.now(zone)
-      val q = historyFilter.searchQuery.trim()
+      val q = filter.searchQuery.trim()
       val filtered =
-        allSessions.filter { item ->
-          val matchesBook =
-            historyFilter.selectedBookId == null || item.session.bookId == historyFilter.selectedBookId
+        sessions.filter { item ->
+          val matchesBook = filter.selectedBookId == null || item.session.bookId == filter.selectedBookId
           val matchesChapter =
-            historyFilter.selectedChapterId == null ||
-              item.session.chapterId == historyFilter.selectedChapterId
+            filter.selectedChapterId == null || item.session.chapterId == filter.selectedChapterId
           val matchesQuery =
             q.isEmpty() ||
               item.bookName.contains(q, ignoreCase = true) ||
               item.chapterName.contains(q, ignoreCase = true) ||
               item.session.notes.contains(q, ignoreCase = true)
           val matchesDate =
-            when (historyFilter.dateFilter) {
+            when (filter.dateFilter) {
               HistoryDateFilter.ALL -> true
               HistoryDateFilter.TODAY -> item.session.sessionDate == today.toString()
               HistoryDateFilter.LAST_7_DAYS -> {
@@ -169,127 +342,27 @@ data class TimerUiState(
             }
           matchesBook && matchesChapter && matchesQuery && matchesDate
         }
-      return when (historyFilter.sortOrder) {
-        HistorySortOrder.NEWEST -> filtered.sortedByDescending { it.session.endWallTimeMs }
-        HistorySortOrder.OLDEST -> filtered.sortedBy { it.session.endWallTimeMs }
-        HistorySortOrder.LONGEST -> filtered.sortedByDescending { it.session.activeFocusMs }
-      }
-    }
-}
-
-@OptIn(ExperimentalCoroutinesApi::class)
-class TimerViewModel(application: Application) : AndroidViewModel(application) {
-  private val app = application as SyllabusApplication
-  private val timerRepo: TimerRepository = app.timerRepository
-  private val syllabusRepo = app.syllabusRepository
-
-  private val setupState = MutableStateFlow(TimerSetupState())
-  private val historyFilterState = MutableStateFlow(HistoryFilterState())
-  private val analyticsPeriodState = MutableStateFlow(AnalyticsPeriod.THIS_WEEK)
-
-  private val _events = MutableSharedFlow<TimerUiEvent>(extraBufferCapacity = 8)
-  val events: SharedFlow<TimerUiEvent> = _events.asSharedFlow()
-
-  private val tickerFlow: Flow<Long> =
-    timerRepo.activeTimerState.flatMapLatest { state ->
-      if (state == null || state.status == TimerStatus.PAUSED || state.status == TimerStatus.STOP_SUMMARY) {
-        flowOf(SystemClock.elapsedRealtime())
-      } else {
-        flow {
-          while (true) {
-            emit(SystemClock.elapsedRealtime())
-            delay(500L)
-          }
+      val sorted =
+        when (filter.sortOrder) {
+          HistorySortOrder.NEWEST -> filtered.sortedByDescending { it.session.endWallTimeMs }
+          HistorySortOrder.OLDEST -> filtered.sortedBy { it.session.endWallTimeMs }
+          HistorySortOrder.LONGEST -> filtered.sortedByDescending { it.session.activeFocusMs }
         }
-      }
-    }
-
-  private val activeEventsFlow: Flow<List<SessionEventEntity>> =
-    timerRepo.activeTimerState.flatMapLatest { state ->
-      if (state == null) flowOf(emptyList()) else timerRepo.observeSessionEvents(state.sessionId)
-    }
-
-  private val liveStudyingFlow: Flow<LiveStudyingUiState> =
-    combine(
-      timerRepo.activeSessionWithMeta,
-      tickerFlow,
-      activeEventsFlow,
-    ) { meta, nowElapsed, sessionEvents ->
-      if (meta == null) {
-        LiveStudyingUiState()
-      } else {
-        val nowWall = System.currentTimeMillis()
-        val metrics = TimerMath.computeMetrics(meta.state, nowElapsed, nowWall)
-        LiveStudyingUiState(
-          activeMeta = meta,
-          metrics = metrics,
-          events = sessionEvents,
-        )
-      }
-    }
-
-  val uiState: StateFlow<TimerUiState> =
-    combine(
-      syllabusRepo.snapshot,
-      setupState,
-      liveStudyingFlow,
-      timerRepo.recoveryPrompt,
-      combine(timerRepo.allSessionsWithMeta, historyFilterState, analyticsPeriodState) {
-        sessions,
-        filter,
-        period ->
-        Triple(sessions, filter, period)
-      },
-    ) { snapshot, setup, live, recovery, (sessions, filter, period) ->
-      val rawBooks = snapshot.books.map { it.book }
-      val preferredBookId =
-        setup.selectedBookId?.takeIf { id -> rawBooks.any { it.id == id } }
-          ?: snapshot.continueStudyingBook?.book?.id
-          ?: rawBooks.firstOrNull()?.id
-
-      val chaptersForBook =
-        if (preferredBookId == null) {
-          emptyList()
-        } else {
-          snapshot.allChapters
-            .filter { it.bookId == preferredBookId }
-            .sortedWith(compareBy({ it.number }, { it.id }))
-        }
-
-      val preferredChapterId =
-        setup.selectedChapterId?.takeIf { cid -> chaptersForBook.any { it.id == cid } }
-          ?: chaptersForBook.firstOrNull { !it.isCompleted }?.id
-          ?: chaptersForBook.firstOrNull()?.id
-
-      val resolvedSetup =
-        setup.copy(
-          selectedBookId = preferredBookId,
-          selectedChapterId = preferredChapterId,
-        )
-
-      val computedAnalytics =
-        TimerAnalyticsCalculator.compute(
-          sessions = sessions,
-          period = period,
-          today = LocalDate.now(),
-        )
-
-      TimerUiState(
-        books = rawBooks,
-        chaptersForSelectedBook = chaptersForBook,
-        allChapters = snapshot.allChapters,
-        setup = resolvedSetup,
-        liveStudying = live,
-        recoveryPrompt = recovery,
-        allSessions = sessions,
+      ReadingHistoryUiState(
+        books = StableList(books),
+        chaptersForFilter = StableList(chaptersForFilter),
+        filteredSessions = StableList(sorted),
+        hasAnySessions = sessions.isNotEmpty(),
         historyFilter = filter,
-        analytics = computedAnalytics,
       )
-    }.stateIn(
-      scope = viewModelScope,
-      started = SharingStarted.WhileSubscribed(5000),
-      initialValue = TimerUiState(),
-    )
+    }
+      .distinctUntilChanged()
+      .flowOn(Dispatchers.Default)
+      .stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ReadingHistoryUiState(),
+      )
 
   fun setAnalyticsPeriod(period: AnalyticsPeriod) {
     analyticsPeriodState.value = period
@@ -313,12 +386,17 @@ class TimerViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun setPomodoroPreset(focusMinutes: Int, breakMinutes: Int) {
+    val clampedFocus = focusMinutes.coerceIn(1, 180)
+    val clampedBreak = breakMinutes.coerceIn(1, 60)
     setupState.update {
       it.copy(
         mode = TimerMode.POMODORO,
-        pomodoroFocusMinutes = focusMinutes.coerceIn(1, 180),
-        pomodoroBreakMinutes = breakMinutes.coerceIn(1, 60),
+        pomodoroFocusMinutes = clampedFocus,
+        pomodoroBreakMinutes = clampedBreak,
       )
+    }
+    app.applicationScope.launch(Dispatchers.IO) {
+      syllabusRepo.setPomodoroDurations(clampedFocus, clampedBreak)
     }
   }
 
@@ -331,14 +409,14 @@ class TimerViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun startTimerSession(onStarted: () -> Unit) {
-    val currentSetup = uiState.value.setup
+    val currentSetup = setupUiState.value.setup
     val bookId = currentSetup.selectedBookId
     val chapterId = currentSetup.selectedChapterId
     if (bookId == null || chapterId == null) {
       _events.tryEmit(TimerUiEvent.ShowMessage("Please select both a book and a chapter."))
       return
     }
-    if (uiState.value.liveStudying.isRunningOrPaused) {
+    if (isTimerActive.value) {
       onStarted()
       return
     }

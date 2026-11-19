@@ -49,6 +49,7 @@ import com.example.ui.components.BottomTab
 import com.example.ui.components.ConfirmDeleteDialog
 import com.example.ui.components.DailyGoalDialog
 import com.example.ui.components.ImportBackupConfirmDialog
+import com.example.ui.components.ImportBackupResultDialog
 import com.example.ui.components.ReminderTimePickerDialog
 import com.example.ui.components.SyllabusBottomBar
 import com.example.ui.components.TimerRecoveryDialog
@@ -70,12 +71,12 @@ import com.example.ui.screens.StudyTimerSetupScreen
 import com.example.ui.screens.StudyingScreen
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.SyllabusTrackerTheme
+import com.example.ui.viewmodel.BookDetailUiState
 import com.example.ui.viewmodel.SyllabusViewModel
 import com.example.ui.viewmodel.TimerUiEvent
 import com.example.ui.viewmodel.TimerViewModel
 import com.example.widgets.WidgetIntents
 import com.example.widgets.WidgetUpdater
-import kotlinx.coroutines.launch
 
 data class PendingWidgetNav(
   val id: Long,
@@ -144,8 +145,9 @@ fun SyllabusApp(
   viewModel: SyllabusViewModel = viewModel(),
   timerViewModel: TimerViewModel = viewModel(),
 ) {
-  val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-  val timerUiState by timerViewModel.uiState.collectAsStateWithLifecycle()
+  val dialogsState by viewModel.dialogsState.collectAsStateWithLifecycle()
+  val preferencesState by viewModel.preferencesState.collectAsStateWithLifecycle()
+  val recoveryPrompt by timerViewModel.recoveryPrompt.collectAsStateWithLifecycle()
   val navController = rememberNavController()
   val backStackEntry by navController.currentBackStackEntryAsState()
   val currentDestination = backStackEntry?.destination
@@ -159,8 +161,8 @@ fun SyllabusApp(
       when (event) {
         Lifecycle.Event.ON_RESUME -> {
           val app = context.applicationContext as? SyllabusApplication
-          app?.applicationScope?.launch {
-            WidgetUpdater.updateNow(app)
+          if (app != null) {
+            WidgetUpdater.requestUpdate(app)
           }
         }
         Lifecycle.Event.ON_STOP -> {
@@ -190,10 +192,10 @@ fun SyllabusApp(
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { /* handled */ }
 
-  LaunchedEffect(Unit) {
+  LaunchedEffect(preferencesState.reminderEnabled) {
     if (
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-        uiState.snapshot.preferences.reminderEnabled &&
+        preferencesState.reminderEnabled &&
         !NotificationHelper.hasNotificationPermission(context)
     ) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -298,13 +300,15 @@ fun SyllabusApp(
       popExitTransition = { ExitTransition.None },
     ) {
       composable<HomeRoute> {
+        val homeUiState by viewModel.homeUiState.collectAsStateWithLifecycle()
+        val isTimerActive by timerViewModel.isTimerActive.collectAsStateWithLifecycle()
         HomeScreen(
-          snapshot = uiState.snapshot,
-          liveStudying = timerUiState.liveStudying,
+          state = homeUiState,
+          liveStudyingState = timerViewModel.liveStudyingState,
           innerPadding = innerPadding,
           onBellClick = { navigateToTab(MoreRoute) },
           onStudyTimerClick = {
-            if (timerUiState.liveStudying.isRunningOrPaused) {
+            if (isTimerActive) {
               navController.navigate(StudyingRoute) { launchSingleTop = true }
             } else {
               navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
@@ -319,10 +323,14 @@ fun SyllabusApp(
       }
 
       composable<BooksRoute> {
+        val booksUiState by viewModel.booksUiState.collectAsStateWithLifecycle()
+        val todayStudyMs by timerViewModel.todayStudyMs.collectAsStateWithLifecycle()
+        val isTimerActive by timerViewModel.isTimerActive.collectAsStateWithLifecycle()
         BooksScreen(
-          uiState = uiState,
-          todayStudyMs = timerUiState.analytics.todayTotalMs,
-          liveStudying = timerUiState.liveStudying,
+          state = booksUiState,
+          todayStudyMs = todayStudyMs,
+          isTimerActive = isTimerActive,
+          liveStudyingState = timerViewModel.liveStudyingState,
           innerPadding = innerPadding,
           onToggleSearch = { viewModel.toggleSearchActive() },
           onSearchQueryChange = { viewModel.setSearchQuery(it) },
@@ -331,7 +339,7 @@ fun SyllabusApp(
           onBookClick = { bookId -> navController.navigate(BookDetailRoute(bookId)) },
           onAddBookClick = { viewModel.openAddBookDialog() },
           onStudyTimerClick = {
-            if (timerUiState.liveStudying.isRunningOrPaused) {
+            if (isTimerActive) {
               navController.navigate(StudyingRoute) { launchSingleTop = true }
             } else {
               navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
@@ -342,16 +350,12 @@ fun SyllabusApp(
 
       composable<BookDetailRoute> { entry ->
         val route = entry.toRoute<BookDetailRoute>()
-        val book by
-          viewModel.observeBookById(route.bookId).collectAsStateWithLifecycle(initialValue = null)
-        val chapters by
-          viewModel
-            .observeChaptersForBook(route.bookId)
-            .collectAsStateWithLifecycle(initialValue = emptyList())
+        val detailState by
+          remember(route.bookId) { viewModel.observeBookDetailUiState(route.bookId) }
+            .collectAsStateWithLifecycle(initialValue = BookDetailUiState())
 
         BookDetailScreen(
-          book = book,
-          chapters = chapters,
+          state = detailState,
           onMarkOpened = { viewModel.markBookOpened(route.bookId) },
           onBackClick = { navController.popBackStack() },
           onEditBookClick = { viewModel.openEditBookDialog(it) },
@@ -364,9 +368,11 @@ fun SyllabusApp(
       }
 
       composable<ProgressRoute> {
+        val progressUiState by viewModel.progressUiState.collectAsStateWithLifecycle()
+        val analyticsUiState by timerViewModel.analyticsUiState.collectAsStateWithLifecycle()
         ProgressScreen(
-          uiState = uiState,
-          timerAnalytics = timerUiState.analytics,
+          state = progressUiState,
+          timerAnalytics = analyticsUiState,
           innerPadding = innerPadding,
           onSelectTab = { viewModel.setProgressTab(it) },
           onSelectTrendPeriod = { viewModel.setTrendPeriod(it) },
@@ -379,12 +385,13 @@ fun SyllabusApp(
       }
 
       composable<MoreRoute> {
+        val isTimerActive by timerViewModel.isTimerActive.collectAsStateWithLifecycle()
         MoreScreen(
-          preferences = uiState.snapshot.preferences,
+          preferences = preferencesState,
           innerPadding = innerPadding,
-          isTimerRunning = timerUiState.liveStudying.isRunningOrPaused,
+          isTimerRunning = isTimerActive,
           onOpenStudyTimer = {
-            if (timerUiState.liveStudying.isRunningOrPaused) {
+            if (isTimerActive) {
               navController.navigate(StudyingRoute) { launchSingleTop = true }
             } else {
               navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
@@ -404,10 +411,14 @@ fun SyllabusApp(
       }
 
       composable<StudyTimerSetupRoute> {
+        val setupUiState by timerViewModel.setupUiState.collectAsStateWithLifecycle()
+        val isTimerActive by timerViewModel.isTimerActive.collectAsStateWithLifecycle()
         StudyTimerSetupScreen(
-          uiState = timerUiState,
+          state = setupUiState,
+          isTimerActive = isTimerActive,
+          liveStudyingState = timerViewModel.liveStudyingState,
           innerPadding = innerPadding,
-          timerPermissionChecklistShown = uiState.snapshot.preferences.timerPermissionChecklistShown,
+          timerPermissionChecklistShown = preferencesState.timerPermissionChecklistShown,
           onPermissionChecklistShown = { viewModel.setTimerPermissionChecklistShown(true) },
           onBackClick = { navController.popBackStack() },
           onSelectBook = { timerViewModel.selectBookForTimer(it) },
@@ -436,7 +447,7 @@ fun SyllabusApp(
 
       composable<StudyingRoute> {
         StudyingScreen(
-          liveState = timerUiState.liveStudying,
+          liveStudyingState = timerViewModel.liveStudyingState,
           innerPadding = innerPadding,
           onMinimizeBack = { navController.popBackStack() },
           onTogglePauseResume = { timerViewModel.togglePauseResume() },
@@ -461,8 +472,9 @@ fun SyllabusApp(
       }
 
       composable<ReadingHistoryRoute> {
+        val historyUiState by timerViewModel.historyUiState.collectAsStateWithLifecycle()
         ReadingHistoryScreen(
-          uiState = timerUiState,
+          state = historyUiState,
           innerPadding = innerPadding,
           observeEvents = { sid -> timerViewModel.observeSessionEvents(sid) },
           onBackClick = { navController.popBackStack() },
@@ -482,7 +494,7 @@ fun SyllabusApp(
     }
   }
 
-  timerUiState.recoveryPrompt?.let { recovery ->
+  recoveryPrompt?.let { recovery ->
     TimerRecoveryDialog(
       data = recovery,
       onResume = {
@@ -495,11 +507,12 @@ fun SyllabusApp(
     )
   }
 
-  if (uiState.addChapterSheet.isOpen) {
+  if (dialogsState.addChapterSheet.isOpen) {
+    val bookSummaries by viewModel.bookSummariesState.collectAsStateWithLifecycle()
     AddChapterBottomSheet(
-      books = uiState.snapshot.books,
-      preselectedBookId = uiState.addChapterSheet.preselectedBookId,
-      editingChapter = uiState.addChapterSheet.editingChapter,
+      books = bookSummaries,
+      preselectedBookId = dialogsState.addChapterSheet.preselectedBookId,
+      editingChapter = dialogsState.addChapterSheet.editingChapter,
       onDismiss = { viewModel.closeAddChapterSheet() },
       onCreateBookClick = { viewModel.openAddBookDialog() },
       onSaveChapter = { bookId, name, number, isCompleted ->
@@ -508,24 +521,24 @@ fun SyllabusApp(
           name = name,
           number = number,
           isCompleted = isCompleted,
-          editingChapter = uiState.addChapterSheet.editingChapter,
+          editingChapter = dialogsState.addChapterSheet.editingChapter,
         )
       },
     )
   }
 
-  if (uiState.bookFormDialog.isOpen) {
+  if (dialogsState.bookFormDialog.isOpen) {
     BookFormDialog(
-      editingBook = uiState.bookFormDialog.editingBook,
+      editingBook = dialogsState.bookFormDialog.editingBook,
       onDismiss = { viewModel.closeBookFormDialog() },
       onConfirm = { name ->
-        viewModel.saveBook(name = name, editingBook = uiState.bookFormDialog.editingBook)
+        viewModel.saveBook(name = name, editingBook = dialogsState.bookFormDialog.editingBook)
       },
     )
   }
 
   ConfirmDeleteDialog(
-    state = uiState.deleteConfirm,
+    state = dialogsState.deleteConfirm,
     onDismiss = { viewModel.dismissDeleteConfirm() },
     onConfirm = {
       viewModel.confirmDelete(
@@ -538,24 +551,24 @@ fun SyllabusApp(
     },
   )
 
-  if (uiState.isDailyGoalDialogOpen) {
+  if (dialogsState.isDailyGoalDialogOpen) {
     DailyGoalDialog(
-      currentGoal = uiState.snapshot.preferences.dailyGoal,
+      currentGoal = preferencesState.dailyGoal,
       onDismiss = { viewModel.closeDailyGoalDialog() },
       onSave = { goal -> viewModel.saveDailyGoal(goal) },
     )
   }
 
-  if (uiState.isTimePickerOpen) {
+  if (dialogsState.isTimePickerOpen) {
     ReminderTimePickerDialog(
-      initialHour = uiState.snapshot.preferences.reminderHour,
-      initialMinute = uiState.snapshot.preferences.reminderMinute,
+      initialHour = preferencesState.reminderHour,
+      initialMinute = preferencesState.reminderMinute,
       onDismiss = { viewModel.closeTimePicker() },
       onConfirm = { hour, minute -> viewModel.saveReminderTime(hour, minute) },
     )
   }
 
-  uiState.pendingBackupImport?.let { backup ->
+  dialogsState.pendingBackupImport?.let { backup ->
     ImportBackupConfirmDialog(
       backup = backup,
       onDismiss = { viewModel.dismissImportConfirm() },
@@ -563,7 +576,14 @@ fun SyllabusApp(
     )
   }
 
-  uiState.backupErrorMessage?.let { errorMsg ->
+  dialogsState.importResult?.let { result ->
+    ImportBackupResultDialog(
+      result = result,
+      onDismiss = { viewModel.dismissImportResult() },
+    )
+  }
+
+  dialogsState.backupErrorMessage?.let { errorMsg ->
     BackupErrorDialog(
       message = errorMsg,
       onDismiss = { viewModel.dismissBackupError() },

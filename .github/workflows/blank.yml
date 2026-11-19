@@ -76,13 +76,14 @@ jobs:
             ls -la debug.keystore .env.example gradle.properties app/build.gradle.kts || true
           } | tee logs/env-info.txt
 
-      - name: Build debug APK
+      - name: Build release APK
         id: build_apk
         shell: bash
         run: |
           mkdir -p logs
+          chmod +x ./gradlew
           set +e
-          gradle assembleDebug \
+          ./gradlew assembleRelease \
             --no-daemon \
             --no-build-cache \
             --max-workers=2 \
@@ -142,10 +143,10 @@ jobs:
           path: logs/
           retention-days: 14
 
-      - name: Upload debug APK
+      - name: Upload release APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SyllabusTracker-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: SyllabusTracker-release-apk
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error

@@ -1,10 +1,12 @@
 package com.example.data.local.entity
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
+@Immutable
 @Entity(
   tableName = "reading_sessions",
   foreignKeys =
@@ -28,6 +30,8 @@ import androidx.room.PrimaryKey
       Index(value = ["bookId"]),
       Index(value = ["chapterId"]),
       Index(value = ["sessionDate"]),
+      Index(value = ["sessionDate", "startWallTimeMs"]),
+      Index(value = ["startWallTimeMs"]),
     ],
 )
 data class ReadingSessionEntity(
@@ -48,6 +52,7 @@ data class ReadingSessionEntity(
   val createdAt: Long = System.currentTimeMillis(),
 )
 
+@Immutable
 @Entity(
   tableName = "session_events",
   foreignKeys =
@@ -83,6 +88,7 @@ data class SessionEventEntity(
   val label: String? = null,
 )
 
+@Immutable
 @Entity(
   tableName = "reading_goals",
   indices = [Index(value = ["periodType"])],
@@ -95,6 +101,7 @@ data class ReadingGoalEntity(
   val createdAt: Long = System.currentTimeMillis(),
 )
 
+@Immutable
 @Entity(
   tableName = "active_timer_state",
   foreignKeys =

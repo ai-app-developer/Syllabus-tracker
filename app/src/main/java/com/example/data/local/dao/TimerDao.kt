@@ -1,5 +1,6 @@
 package com.example.data.local.dao
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Dao
 import androidx.room.Embedded
 import androidx.room.Insert
@@ -12,6 +13,7 @@ import com.example.data.local.entity.ReadingSessionEntity
 import com.example.data.local.entity.SessionEventEntity
 import kotlinx.coroutines.flow.Flow
 
+@Immutable
 data class ReadingSessionWithMeta(
   @Embedded val session: ReadingSessionEntity,
   val bookName: String,
@@ -19,10 +21,47 @@ data class ReadingSessionWithMeta(
   val chapterNumber: Int,
 )
 
+@Immutable
+data class ActiveTimerWithMetaRow(
+  @Embedded val state: ActiveTimerStateEntity,
+  val bookName: String?,
+  val chapterName: String?,
+  val chapterNumber: Int?,
+)
+
+@Immutable
+data class BookFocusTotalRow(
+  val bookId: Long,
+  val bookName: String,
+  val totalMs: Long,
+)
+
+@Immutable
+data class DailyFocusTotalRow(
+  val sessionDate: String,
+  val totalMs: Long,
+)
+
 @Dao
 interface TimerDao {
   @Query("SELECT * FROM active_timer_state WHERE id = 1 LIMIT 1")
   fun observeActiveTimerState(): Flow<ActiveTimerStateEntity?>
+
+  @Query(
+    """
+    SELECT
+      ats.*,
+      b.name AS bookName,
+      c.name AS chapterName,
+      c.number AS chapterNumber
+    FROM active_timer_state ats
+    LEFT JOIN books b ON b.id = ats.bookId
+    LEFT JOIN chapters c ON c.id = ats.chapterId
+    WHERE ats.id = 1
+    LIMIT 1
+    """
+  )
+  fun observeActiveSessionWithMeta(): Flow<ActiveTimerWithMetaRow?>
 
   @Query("SELECT * FROM active_timer_state WHERE id = 1 LIMIT 1")
   suspend fun getActiveTimerStateOnce(): ActiveTimerStateEntity?
@@ -77,8 +116,63 @@ interface TimerDao {
   @Query("SELECT COALESCE(SUM(activeFocusMs), 0) FROM reading_sessions WHERE sessionDate = :todayDate")
   fun observeTodayFocusMs(todayDate: String): Flow<Long>
 
+  @Query(
+    "SELECT COALESCE(SUM(activeFocusMs), 0) FROM reading_sessions WHERE sessionDate >= :startDate AND sessionDate <= :endDate"
+  )
+  fun observeTotalFocusMsBetween(startDate: String, endDate: String): Flow<Long>
+
+  @Query(
+    """
+    SELECT rs.bookId AS bookId, b.name AS bookName, COALESCE(SUM(rs.activeFocusMs), 0) AS totalMs
+    FROM reading_sessions rs
+    INNER JOIN books b ON b.id = rs.bookId
+    WHERE rs.sessionDate >= :startDate AND rs.sessionDate <= :endDate AND rs.activeFocusMs > 0
+    GROUP BY rs.bookId, b.name
+    ORDER BY totalMs DESC, rs.bookId ASC
+    """
+  )
+  fun observeBookFocusTotalsBetween(startDate: String, endDate: String): Flow<List<BookFocusTotalRow>>
+
+  @Query(
+    """
+    SELECT sessionDate, COALESCE(SUM(activeFocusMs), 0) AS totalMs
+    FROM reading_sessions
+    WHERE sessionDate >= :startDate AND sessionDate <= :endDate
+    GROUP BY sessionDate
+    ORDER BY sessionDate ASC
+    """
+  )
+  fun observeDailyFocusTotalsBetween(startDate: String, endDate: String): Flow<List<DailyFocusTotalRow>>
+
+  @Query("SELECT DISTINCT sessionDate FROM reading_sessions WHERE activeFocusMs > 0 ORDER BY sessionDate DESC")
+  fun observeDistinctActiveDatesDescending(): Flow<List<String>>
+
+  @Query("SELECT COUNT(*) FROM reading_sessions")
+  fun observeSessionCount(): Flow<Int>
+
   @Query("SELECT * FROM reading_sessions ORDER BY endWallTimeMs DESC, id DESC")
   suspend fun getAllSessionsOnce(): List<ReadingSessionEntity>
+
+  @Query("SELECT * FROM session_events ORDER BY wallTimeMs ASC, id ASC")
+  suspend fun getAllEventsOnce(): List<SessionEventEntity>
+
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  suspend fun insertSessions(sessions: List<ReadingSessionEntity>): List<Long>
+
+  @Insert(onConflict = OnConflictStrategy.IGNORE)
+  suspend fun insertEvents(events: List<SessionEventEntity>): List<Long>
+
+  @Insert(onConflict = OnConflictStrategy.REPLACE)
+  suspend fun insertGoals(goals: List<ReadingGoalEntity>): List<Long>
+
+  @Query("DELETE FROM session_events")
+  suspend fun deleteAllSessionEvents()
+
+  @Query("DELETE FROM reading_sessions")
+  suspend fun deleteAllReadingSessions()
+
+  @Query("DELETE FROM reading_goals")
+  suspend fun deleteAllReadingGoals()
 
   @Query("SELECT * FROM reading_goals WHERE isActive = 1 ORDER BY id ASC")
   fun observeActiveGoals(): Flow<List<ReadingGoalEntity>>

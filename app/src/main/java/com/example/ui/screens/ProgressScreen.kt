@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -89,11 +90,15 @@ import com.example.ui.theme.VibrantGreen
 import com.example.ui.theme.VioletGradientBottom
 import com.example.ui.theme.VioletGradientTop
 import com.example.ui.viewmodel.ProgressTab
-import com.example.ui.viewmodel.SyllabusUiState
+import com.example.ui.viewmodel.ProgressUiState
+
+private val EmptyBarBrush = Brush.verticalGradient(listOf(ProgressTrack, ProgressTrack))
+private val HighestBarBrush = Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
+private val NormalBarBrush = Brush.verticalGradient(listOf(Color(0xFFCBC3FE), Color(0xFFD9D3FE)))
 
 @Composable
 fun ProgressScreen(
-  uiState: SyllabusUiState,
+  state: ProgressUiState,
   timerAnalytics: TimerAnalyticsUiState,
   innerPadding: PaddingValues,
   onSelectTab: (ProgressTab) -> Unit,
@@ -136,21 +141,21 @@ fun ProgressScreen(
       ) {
         ProgressTabPill(
           label = stringResource(R.string.tab_overall),
-          selected = uiState.progressTab == ProgressTab.OVERALL,
+          selected = state.progressTab == ProgressTab.OVERALL,
           testTag = "tab_overall",
           onClick = { onSelectTab(ProgressTab.OVERALL) },
           modifier = Modifier.weight(1f),
         )
         ProgressTabPill(
           label = stringResource(R.string.tab_by_book),
-          selected = uiState.progressTab == ProgressTab.BY_BOOK,
+          selected = state.progressTab == ProgressTab.BY_BOOK,
           testTag = "tab_by_book",
           onClick = { onSelectTab(ProgressTab.BY_BOOK) },
           modifier = Modifier.weight(1f),
         )
         ProgressTabPill(
           label = stringResource(R.string.tab_timer),
-          selected = uiState.progressTab == ProgressTab.TIMER,
+          selected = state.progressTab == ProgressTab.TIMER,
           testTag = "tab_timer",
           onClick = { onSelectTab(ProgressTab.TIMER) },
           modifier = Modifier.weight(1f),
@@ -159,7 +164,7 @@ fun ProgressScreen(
 
       Spacer(modifier = Modifier.height(16.dp))
 
-      when (uiState.progressTab) {
+      when (state.progressTab) {
         ProgressTab.OVERALL -> {
           Column(
             modifier =
@@ -185,7 +190,7 @@ fun ProgressScreen(
               Column {
                 Column(modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp)) {
                   Text(
-                    text = "${uiState.snapshot.overallPercentage}%",
+                    text = "${state.overallPercentage}%",
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary,
@@ -201,7 +206,7 @@ fun ProgressScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 FlatCumulativeChart(
-                  series = uiState.cumulativeSeries,
+                  series = state.cumulativeSeries,
                   modifier = Modifier.fillMaxWidth().height(92.dp),
                 )
 
@@ -214,7 +219,7 @@ fun ProgressScreen(
                   ProgressStatColumn(
                     icon = Icons.Outlined.CheckCircle,
                     iconTint = VibrantGreen,
-                    value = uiState.snapshot.completedChapters.toString(),
+                    value = state.completedChapters.toString(),
                     label = stringResource(R.string.completed_label),
                     modifier = Modifier.weight(1f),
                   )
@@ -226,7 +231,7 @@ fun ProgressScreen(
                   ProgressStatColumn(
                     icon = Icons.Outlined.AccessTime,
                     iconTint = TextSecondary,
-                    value = uiState.snapshot.remainingChapters.toString(),
+                    value = state.remainingChapters.toString(),
                     label = stringResource(R.string.remaining_label),
                     modifier = Modifier.weight(1f),
                   )
@@ -238,7 +243,7 @@ fun ProgressScreen(
                   ProgressStatColumn(
                     icon = Icons.Outlined.Layers,
                     iconTint = PrimaryIndigo,
-                    value = uiState.snapshot.totalChapters.toString(),
+                    value = state.totalChapters.toString(),
                     label = stringResource(R.string.total_label),
                     modifier = Modifier.weight(1f),
                   )
@@ -249,15 +254,15 @@ fun ProgressScreen(
             Spacer(modifier = Modifier.height(14.dp))
 
             StudyTrendCard(
-              trend = uiState.weeklyTrend,
-              period = uiState.trendPeriod,
+              trend = state.weeklyTrend,
+              period = state.trendPeriod,
               onSelectPeriod = onSelectTrendPeriod,
             )
           }
         }
 
         ProgressTab.BY_BOOK -> {
-          if (uiState.snapshot.books.isEmpty()) {
+          if (state.books.isEmpty()) {
             Box(
               modifier = Modifier.weight(1f).fillMaxWidth().padding(bottom = bottomPad),
               contentAlignment = Alignment.Center,
@@ -274,7 +279,11 @@ fun ProgressScreen(
               verticalArrangement = Arrangement.spacedBy(12.dp),
               contentPadding = PaddingValues(bottom = bottomPad),
             ) {
-              itemsIndexed(uiState.snapshot.books, key = { _, it -> it.book.id }) { index, summary ->
+              itemsIndexed(
+                items = state.books,
+                key = { _, it -> it.book.id },
+                contentType = { _, _ -> "book" },
+              ) { index, summary ->
                 BookProgressCard(
                   summary = summary,
                   colorSlot = index,
@@ -502,49 +511,49 @@ private fun TimerStudyTimeCard(
         verticalAlignment = Alignment.Bottom,
       ) {
         analytics.bars.forEach { bucket ->
-          val hasData = bucket.durationMs > 0L
-          val barHeight =
-            if (!hasData) {
-              10.dp
-            } else {
-              ((bucket.durationMs.toFloat() / maxMs.toFloat()) * 76f).dp.coerceAtLeast(18.dp)
-            }
-          val barShape = RoundedCornerShape(topStart = 9.dp, topEnd = 9.dp, bottomStart = 5.dp, bottomEnd = 5.dp)
+          key(bucket.label) {
+            val hasData = bucket.durationMs > 0L
+            val barHeight =
+              if (!hasData) {
+                10.dp
+              } else {
+                ((bucket.durationMs.toFloat() / maxMs.toFloat()) * 76f).dp.coerceAtLeast(18.dp)
+              }
+            val barShape = RoundedCornerShape(topStart = 9.dp, topEnd = 9.dp, bottomStart = 5.dp, bottomEnd = 5.dp)
 
-          Column(
-            modifier = Modifier.weight(1f),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Bottom,
-          ) {
-            Box(
-              modifier =
-                Modifier.width(28.dp)
-                  .height(barHeight)
-                  .clip(barShape)
-                  .background(
-                    when {
-                      !hasData -> Brush.verticalGradient(listOf(ProgressTrack, ProgressTrack))
-                      bucket.isHighest ->
-                        Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
-                      else ->
-                        Brush.verticalGradient(listOf(Color(0xFFCBC3FE), Color(0xFFD9D3FE)))
-                    }
-                  ),
-            )
-            Spacer(modifier = Modifier.height(7.dp))
-            Text(
-              text = bucket.label,
-              fontSize = 11.sp,
-              color = TextSecondary,
-              maxLines = 1,
-            )
-            Text(
-              text = bucket.valueLabel,
-              fontSize = 12.sp,
-              fontWeight = FontWeight.Bold,
-              color = TextPrimary,
-              maxLines = 1,
-            )
+            Column(
+              modifier = Modifier.weight(1f),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Bottom,
+            ) {
+              Box(
+                modifier =
+                  Modifier.width(28.dp)
+                    .height(barHeight)
+                    .clip(barShape)
+                    .background(
+                      when {
+                        !hasData -> EmptyBarBrush
+                        bucket.isHighest -> HighestBarBrush
+                        else -> NormalBarBrush
+                      }
+                    ),
+              )
+              Spacer(modifier = Modifier.height(7.dp))
+              Text(
+                text = bucket.label,
+                fontSize = 11.sp,
+                color = TextSecondary,
+                maxLines = 1,
+              )
+              Text(
+                text = bucket.valueLabel,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+                maxLines = 1,
+              )
+            }
           }
         }
       }
@@ -662,32 +671,34 @@ private fun BookWiseStudyTimeCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             slices.forEach { slice ->
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Box(
-                  modifier =
-                    Modifier.size(9.dp)
-                      .clip(CircleShape)
-                      .background(Color(slice.colorHex)),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                  text = slice.bookName,
-                  fontSize = 13.sp,
-                  color = TextSecondary,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                  modifier = Modifier.weight(1f),
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = TimerMath.formatHoursMinutes(slice.totalMs),
-                  fontSize = 13.sp,
-                  fontWeight = FontWeight.Bold,
-                  color = TextPrimary,
-                )
+              key(slice.bookId ?: -1L, slice.bookName) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Box(
+                    modifier =
+                      Modifier.size(9.dp)
+                        .clip(CircleShape)
+                        .background(Color(slice.colorHex)),
+                  )
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text(
+                    text = slice.bookName,
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                  )
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text(
+                    text = TimerMath.formatHoursMinutes(slice.totalMs),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary,
+                  )
+                }
               }
             }
           }
@@ -948,44 +959,46 @@ private fun StudyTrendCard(
         verticalAlignment = Alignment.Bottom,
       ) {
         trend.forEach { day ->
-          val barColor =
-            when {
-              day.count == 0 -> ProgressTrack
-              day.isToday -> PrimaryIndigo
-              else -> SecondaryIndigoBar
-            }
-          val barHeight =
-            if (day.count == 0) 8.dp
-            else ((day.count.toFloat() / maxCount.toFloat()) * 86f).dp.coerceAtLeast(16.dp)
+          key(day.date) {
+            val barColor =
+              when {
+                day.count == 0 -> ProgressTrack
+                day.isToday -> PrimaryIndigo
+                else -> SecondaryIndigoBar
+              }
+            val barHeight =
+              if (day.count == 0) 8.dp
+              else ((day.count.toFloat() / maxCount.toFloat()) * 86f).dp.coerceAtLeast(16.dp)
 
-          Column(
-            modifier = Modifier.weight(1f),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Bottom,
-          ) {
-            if (day.count > 0) {
-              Text(
-                text = day.count.toString(),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (day.isToday) PrimaryIndigo else TextSecondary,
+            Column(
+              modifier = Modifier.weight(1f),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.Bottom,
+            ) {
+              if (day.count > 0) {
+                Text(
+                  text = day.count.toString(),
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Medium,
+                  color = if (day.isToday) PrimaryIndigo else TextSecondary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+              }
+              Box(
+                modifier =
+                  Modifier.width(26.dp)
+                    .height(barHeight)
+                    .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 4.dp, bottomEnd = 4.dp))
+                    .background(barColor),
               )
-              Spacer(modifier = Modifier.height(4.dp))
+              Spacer(modifier = Modifier.height(8.dp))
+              Text(
+                text = day.dayLabel.take(3),
+                fontSize = 12.sp,
+                fontWeight = if (day.isToday) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (day.isToday) TextPrimary else TextSecondary,
+              )
             }
-            Box(
-              modifier =
-                Modifier.width(26.dp)
-                  .height(barHeight)
-                  .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 4.dp, bottomEnd = 4.dp))
-                  .background(barColor),
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-              text = day.dayLabel.take(3),
-              fontSize = 12.sp,
-              fontWeight = if (day.isToday) FontWeight.SemiBold else FontWeight.Normal,
-              color = if (day.isToday) TextPrimary else TextSecondary,
-            )
           }
         }
       }

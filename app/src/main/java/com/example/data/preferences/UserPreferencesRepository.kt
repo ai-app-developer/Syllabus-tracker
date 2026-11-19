@@ -1,6 +1,7 @@
 package com.example.data.preferences
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.onEach
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "syllabus_prefs")
 
+@Immutable
 data class UserPreferences(
   val dailyGoal: Int = DEFAULT_DAILY_GOAL,
   val reminderEnabled: Boolean = true,
@@ -24,11 +26,15 @@ data class UserPreferences(
   val timerAlarmEnabled: Boolean = true,
   val timerVibrationEnabled: Boolean = true,
   val timerPermissionChecklistShown: Boolean = false,
+  val pomodoroFocusMinutes: Int = DEFAULT_POMODORO_FOCUS_MINUTES,
+  val pomodoroBreakMinutes: Int = DEFAULT_POMODORO_BREAK_MINUTES,
 ) {
   companion object {
     const val DEFAULT_DAILY_GOAL = 2
     const val DEFAULT_REMINDER_HOUR = 20 // 8:00 PM
     const val DEFAULT_REMINDER_MINUTE = 0
+    const val DEFAULT_POMODORO_FOCUS_MINUTES = 25
+    const val DEFAULT_POMODORO_BREAK_MINUTES = 5
   }
 }
 
@@ -42,6 +48,8 @@ class UserPreferencesRepository(private val context: Context) {
     val TIMER_ALARM_ENABLED = booleanPreferencesKey("timer_alarm_enabled")
     val TIMER_VIBRATION_ENABLED = booleanPreferencesKey("timer_vibration_enabled")
     val TIMER_PERMISSION_CHECKLIST_SHOWN = booleanPreferencesKey("timer_permission_checklist_shown")
+    val POMODORO_FOCUS_MINUTES = intPreferencesKey("pomodoro_focus_minutes")
+    val POMODORO_BREAK_MINUTES = intPreferencesKey("pomodoro_break_minutes")
   }
 
   @Volatile
@@ -61,6 +69,12 @@ class UserPreferencesRepository(private val context: Context) {
           timerAlarmEnabled = prefs[Keys.TIMER_ALARM_ENABLED] ?: true,
           timerVibrationEnabled = prefs[Keys.TIMER_VIBRATION_ENABLED] ?: true,
           timerPermissionChecklistShown = prefs[Keys.TIMER_PERMISSION_CHECKLIST_SHOWN] ?: false,
+          pomodoroFocusMinutes =
+            (prefs[Keys.POMODORO_FOCUS_MINUTES] ?: UserPreferences.DEFAULT_POMODORO_FOCUS_MINUTES)
+              .coerceIn(1, 180),
+          pomodoroBreakMinutes =
+            (prefs[Keys.POMODORO_BREAK_MINUTES] ?: UserPreferences.DEFAULT_POMODORO_BREAK_MINUTES)
+              .coerceIn(1, 60),
         )
       }
       .onEach { cachedPrefs = it }
@@ -109,5 +123,41 @@ class UserPreferencesRepository(private val context: Context) {
   suspend fun setTimerPermissionChecklistShown(shown: Boolean) {
     cachedPrefs = cachedPrefs?.copy(timerPermissionChecklistShown = shown)
     context.dataStore.edit { prefs -> prefs[Keys.TIMER_PERMISSION_CHECKLIST_SHOWN] = shown }
+  }
+
+  suspend fun setPomodoroDurations(focusMinutes: Int, breakMinutes: Int) {
+    val focus = focusMinutes.coerceIn(1, 180)
+    val brk = breakMinutes.coerceIn(1, 60)
+    cachedPrefs =
+      cachedPrefs?.copy(pomodoroFocusMinutes = focus, pomodoroBreakMinutes = brk)
+    context.dataStore.edit { prefs ->
+      prefs[Keys.POMODORO_FOCUS_MINUTES] = focus
+      prefs[Keys.POMODORO_BREAK_MINUTES] = brk
+    }
+  }
+
+  suspend fun restorePreferences(target: UserPreferences): UserPreferences {
+    val sanitized =
+      target.copy(
+        dailyGoal = target.dailyGoal.coerceIn(1, 50),
+        reminderHour = target.reminderHour.coerceIn(0, 23),
+        reminderMinute = target.reminderMinute.coerceIn(0, 59),
+        pomodoroFocusMinutes = target.pomodoroFocusMinutes.coerceIn(1, 180),
+        pomodoroBreakMinutes = target.pomodoroBreakMinutes.coerceIn(1, 60),
+      )
+    cachedPrefs = sanitized
+    context.dataStore.edit { prefs ->
+      prefs[Keys.DAILY_GOAL] = sanitized.dailyGoal
+      prefs[Keys.REMINDER_ENABLED] = sanitized.reminderEnabled
+      prefs[Keys.REMINDER_HOUR] = sanitized.reminderHour
+      prefs[Keys.REMINDER_MINUTE] = sanitized.reminderMinute
+      prefs[Keys.LAST_OPENED_BOOK_ID] = sanitized.lastOpenedBookId
+      prefs[Keys.TIMER_ALARM_ENABLED] = sanitized.timerAlarmEnabled
+      prefs[Keys.TIMER_VIBRATION_ENABLED] = sanitized.timerVibrationEnabled
+      prefs[Keys.TIMER_PERMISSION_CHECKLIST_SHOWN] = sanitized.timerPermissionChecklistShown
+      prefs[Keys.POMODORO_FOCUS_MINUTES] = sanitized.pomodoroFocusMinutes
+      prefs[Keys.POMODORO_BREAK_MINUTES] = sanitized.pomodoroBreakMinutes
+    }
+    return sanitized
   }
 }

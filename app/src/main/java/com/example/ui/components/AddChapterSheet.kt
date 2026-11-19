@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.entity.ChapterEntity
 import com.example.data.repository.BookProgressSummary
+import com.example.ui.model.StableList
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.HairlineBorder
@@ -73,7 +74,7 @@ import com.example.ui.theme.TextSecondary
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddChapterBottomSheet(
-  books: List<BookProgressSummary>,
+  books: StableList<BookProgressSummary>,
   preselectedBookId: Long?,
   editingChapter: ChapterEntity?,
   onDismiss: () -> Unit,

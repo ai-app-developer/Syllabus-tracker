@@ -54,6 +54,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -95,6 +96,13 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+private val RECOVERY_TIME_FORMATTER: DateTimeFormatter =
+  DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault())
+private val DIALOG_TIME_FORMATTER: DateTimeFormatter =
+  DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+private val DIALOG_DATE_FORMATTER: DateTimeFormatter =
+  DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.getDefault())
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -146,23 +154,25 @@ fun SessionGoalDialog(
               ),
           )
           presets.forEach { (presetMin, label) ->
-            val isSelected = !noGoalSelected && (hours * 60 + minutes) == presetMin
-            FilterChip(
-              selected = isSelected,
-              onClick = {
-                noGoalSelected = false
-                hours = presetMin / 60
-                minutes = presetMin % 60
-              },
-              label = { Text(label) },
-              colors =
-                FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = PrimaryIndigo,
-                  selectedLabelColor = Color.White,
-                  containerColor = AppBackground,
-                  labelColor = TextPrimary,
-                ),
-            )
+            key(presetMin) {
+              val isSelected = !noGoalSelected && (hours * 60 + minutes) == presetMin
+              FilterChip(
+                selected = isSelected,
+                onClick = {
+                  noGoalSelected = false
+                  hours = presetMin / 60
+                  minutes = presetMin % 60
+                },
+                label = { Text(label) },
+                colors =
+                  FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = PrimaryIndigo,
+                    selectedLabelColor = Color.White,
+                    containerColor = AppBackground,
+                    labelColor = TextPrimary,
+                  ),
+              )
+            }
           }
         }
         Spacer(modifier = Modifier.height(14.dp))
@@ -443,7 +453,7 @@ fun TimerRecoveryDialog(
     remember(data.state.lastKnownWallTimeMs) {
       Instant.ofEpochMilli(data.state.lastKnownWallTimeMs)
         .atZone(ZoneId.systemDefault())
-        .format(DateTimeFormatter.ofPattern("MMM d, h:mm a", Locale.getDefault()))
+        .format(RECOVERY_TIME_FORMATTER)
     }
 
   AlertDialog(
@@ -538,16 +548,15 @@ fun SessionDetailDialog(
   onRequestDelete: () -> Unit,
 ) {
   var notesText by remember(item.session.id) { mutableStateOf(item.session.notes) }
-  val zone = ZoneId.systemDefault()
-  val timeFormatter = remember { DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()) }
-  val dateFormatter = remember { DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.getDefault()) }
-
-  val dateText =
-    Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(zone).format(dateFormatter)
-  val startStr =
-    Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(zone).format(timeFormatter)
-  val endStr =
-    Instant.ofEpochMilli(item.session.endWallTimeMs).atZone(zone).format(timeFormatter)
+  val (dateText, startStr, endStr) =
+    remember(item.session.id, item.session.startWallTimeMs, item.session.endWallTimeMs) {
+      val zone = ZoneId.systemDefault()
+      Triple(
+        Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(zone).format(DIALOG_DATE_FORMATTER),
+        Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(zone).format(DIALOG_TIME_FORMATTER),
+        Instant.ofEpochMilli(item.session.endWallTimeMs).atZone(zone).format(DIALOG_TIME_FORMATTER),
+      )
+    }
 
   val focusPct =
     remember(item.session.activeFocusMs, item.session.pauseMs) {
@@ -619,38 +628,40 @@ fun SessionDetailDialog(
           ) {
             Column(modifier = Modifier.padding(10.dp)) {
               laps.forEachIndexed { idx, lap ->
-                if (idx > 0) {
-                  HorizontalDivider(
-                    thickness = 1.dp,
-                    color = HairlineBorder,
-                    modifier = Modifier.padding(vertical = 6.dp),
-                  )
-                }
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                      imageVector = Icons.Outlined.Flag,
-                      contentDescription = null,
-                      tint = PrimaryIndigo,
-                      modifier = Modifier.size(16.dp),
+                key(lap.id) {
+                  if (idx > 0) {
+                    HorizontalDivider(
+                      thickness = 1.dp,
+                      color = HairlineBorder,
+                      modifier = Modifier.padding(vertical = 6.dp),
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                  }
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                      Icon(
+                        imageVector = Icons.Outlined.Flag,
+                        contentDescription = null,
+                        tint = PrimaryIndigo,
+                        modifier = Modifier.size(16.dp),
+                      )
+                      Spacer(modifier = Modifier.width(6.dp))
+                      Text(
+                        text = lap.label ?: "Lap ${idx + 1}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextPrimary,
+                      )
+                    }
                     Text(
-                      text = lap.label ?: "Lap ${idx + 1}",
+                      text = TimerMath.formatHms(lap.elapsedAtEventMs),
                       style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = FontWeight.SemiBold,
                       color = TextPrimary,
                     )
                   }
-                  Text(
-                    text = TimerMath.formatHms(lap.elapsedAtEventMs),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary,
-                  )
                 }
               }
             }

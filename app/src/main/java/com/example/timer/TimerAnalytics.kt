@@ -1,5 +1,8 @@
 package com.example.timer
 
+import androidx.compose.runtime.Immutable
+import com.example.data.local.dao.BookFocusTotalRow
+import com.example.data.local.dao.DailyFocusTotalRow
 import com.example.data.local.dao.ReadingSessionWithMeta
 import java.time.DayOfWeek
 import java.time.Instant
@@ -18,6 +21,7 @@ enum class AnalyticsPeriod(
   THIS_YEAR("This Year", "than last year"),
 }
 
+@Immutable
 data class StudyBarBucket(
   val label: String,
   val durationMs: Long,
@@ -25,6 +29,7 @@ data class StudyBarBucket(
   val isHighest: Boolean,
 )
 
+@Immutable
 data class BookStudySlice(
   val bookId: Long?,
   val bookName: String,
@@ -32,6 +37,7 @@ data class BookStudySlice(
   val colorHex: Long,
 )
 
+@Immutable
 data class TimerAnalyticsUiState(
   val period: AnalyticsPeriod = AnalyticsPeriod.THIS_WEEK,
   val todayTotalMs: Long = 0L,
@@ -43,6 +49,14 @@ data class TimerAnalyticsUiState(
   val currentStreakDays: Int = 0,
 )
 
+@Immutable
+data class AnalyticsPeriodBounds(
+  val start: LocalDate,
+  val end: LocalDate,
+  val prevStart: LocalDate,
+  val prevEnd: LocalDate,
+)
+
 object TimerAnalyticsCalculator {
   private val slicePalette =
     listOf(
@@ -52,6 +66,127 @@ object TimerAnalyticsCalculator {
       0xFFF59E0BL, // Orange
       0xFFCBD5E1L, // Others grey
     )
+
+  fun computeFromAggregates(
+    period: AnalyticsPeriod,
+    todayTotalMs: Long,
+    periodTotalMs: Long,
+    previousPeriodTotalMs: Long,
+    dailyRows: List<DailyFocusTotalRow>,
+    bookRows: List<BookFocusTotalRow>,
+    activeDatesDesc: List<String>,
+    today: LocalDate = LocalDate.now(),
+  ): TimerAnalyticsUiState {
+    val bounds = periodBounds(period, today)
+    val deltaPercent =
+      if (previousPeriodTotalMs > 0L) {
+        (((periodTotalMs - previousPeriodTotalMs).toDouble() / previousPeriodTotalMs.toDouble()) * 100.0).roundToInt()
+      } else {
+        null
+      }
+
+    val dailyParsed =
+      dailyRows.mapNotNull { row ->
+        runCatching { LocalDate.parse(row.sessionDate) to row.totalMs.coerceAtLeast(0L) }.getOrNull()
+      }
+
+    val rawBuckets: List<Pair<String, Long>> =
+      when (period) {
+        AnalyticsPeriod.THIS_WEEK -> {
+          val byDate = dailyParsed.groupBy({ it.first }, { it.second }).mapValues { (_, v) -> v.sum() }
+          (0..6).map { offset ->
+            val date = bounds.start.plusDays(offset.toLong())
+            val label = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.US).take(3)
+            label to (byDate[date] ?: 0L)
+          }
+        }
+        AnalyticsPeriod.THIS_MONTH -> {
+          val monthLen = today.lengthOfMonth()
+          val ranges =
+            listOf(1..7, 8..14, 15..21, 22..28, 29..monthLen).filter { it.first <= it.last }
+          ranges.mapIndexed { idx, range ->
+            val totalMs =
+              dailyParsed
+                .filter { (date, _) -> date.dayOfMonth in range }
+                .sumOf { it.second }
+            "W${idx + 1}" to totalMs
+          }
+        }
+        AnalyticsPeriod.THIS_YEAR -> {
+          val monthRange = if (today.monthValue <= 6) 1..6 else 7..12
+          monthRange.map { monthVal ->
+            val totalMs =
+              dailyParsed
+                .filter { (date, _) -> date.monthValue == monthVal }
+                .sumOf { it.second }
+            val monthName =
+              today.withMonth(monthVal).month.getDisplayName(TextStyle.SHORT, Locale.US).take(3)
+            monthName to totalMs
+          }
+        }
+      }
+
+    val maxMs = rawBuckets.maxOfOrNull { it.second } ?: 0L
+    val bars =
+      rawBuckets.map { (label, ms) ->
+        StudyBarBucket(
+          label = label,
+          durationMs = ms,
+          valueLabel = formatBarDuration(ms),
+          isHighest = maxMs > 0L && ms == maxMs,
+        )
+      }
+
+    val sortedBooks =
+      bookRows
+        .filter { it.totalMs > 0L }
+        .sortedWith(compareByDescending<BookFocusTotalRow> { it.totalMs }.thenBy { it.bookId })
+    val bookSlices =
+      if (sortedBooks.isEmpty()) {
+        emptyList()
+      } else if (sortedBooks.size <= 4) {
+        sortedBooks.mapIndexed { idx, row ->
+          BookStudySlice(
+            bookId = row.bookId,
+            bookName = row.bookName,
+            totalMs = row.totalMs,
+            colorHex = slicePalette[idx],
+          )
+        }
+      } else {
+        val top4 =
+          sortedBooks.take(4).mapIndexed { idx, row ->
+            BookStudySlice(
+              bookId = row.bookId,
+              bookName = row.bookName,
+              totalMs = row.totalMs,
+              colorHex = slicePalette[idx],
+            )
+          }
+        val othersMs = sortedBooks.drop(4).sumOf { it.totalMs }
+        top4 +
+          BookStudySlice(
+            bookId = null,
+            bookName = "Others",
+            totalMs = othersMs,
+            colorHex = slicePalette[4],
+          )
+      }
+
+    val activeLocalDates = activeDatesDesc.mapNotNull { runCatching { LocalDate.parse(it) }.getOrNull() }
+    val streak = computeCurrentStreak(activeLocalDates, today)
+
+    return TimerAnalyticsUiState(
+      period = period,
+      todayTotalMs = todayTotalMs,
+      periodTotalMs = periodTotalMs,
+      previousPeriodTotalMs = previousPeriodTotalMs,
+      deltaPercent = deltaPercent,
+      bars = bars,
+      bookSlices = bookSlices,
+      currentStreakDays = streak,
+    )
+  }
 
   fun compute(
     sessions: List<ReadingSessionWithMeta>,
@@ -110,20 +245,13 @@ object TimerAnalyticsCalculator {
     )
   }
 
-  private data class Bounds(
-    val start: LocalDate,
-    val end: LocalDate,
-    val prevStart: LocalDate,
-    val prevEnd: LocalDate,
-  )
-
-  private fun periodBounds(period: AnalyticsPeriod, today: LocalDate): Bounds {
+  fun periodBounds(period: AnalyticsPeriod, today: LocalDate): AnalyticsPeriodBounds {
     return when (period) {
       AnalyticsPeriod.THIS_WEEK -> {
         val daysSinceSat = (today.dayOfWeek.value - DayOfWeek.SATURDAY.value + 7) % 7
         val sat = today.minusDays(daysSinceSat.toLong())
         val fri = sat.plusDays(6)
-        Bounds(
+        AnalyticsPeriodBounds(
           start = sat,
           end = fri,
           prevStart = sat.minusDays(7),
@@ -134,7 +262,7 @@ object TimerAnalyticsCalculator {
         val firstOfMonth = today.withDayOfMonth(1)
         val lastOfMonth = today.withDayOfMonth(today.lengthOfMonth())
         val prevMonth = firstOfMonth.minusMonths(1)
-        Bounds(
+        AnalyticsPeriodBounds(
           start = firstOfMonth,
           end = lastOfMonth,
           prevStart = prevMonth,
@@ -145,7 +273,7 @@ object TimerAnalyticsCalculator {
         val firstOfYear = today.withDayOfYear(1)
         val lastOfYear = today.withDayOfYear(today.lengthOfYear())
         val prevYearStart = firstOfYear.minusYears(1)
-        Bounds(
+        AnalyticsPeriodBounds(
           start = firstOfYear,
           end = lastOfYear,
           prevStart = prevYearStart,
@@ -223,7 +351,7 @@ object TimerAnalyticsCalculator {
             items.sumOf { it.session.activeFocusMs.coerceAtLeast(0L) },
           )
         }
-        .sortedByDescending { it.third }
+        .sortedWith(compareByDescending<Triple<Long, String, Long>> { it.third }.thenBy { it.first })
 
     if (grouped.isEmpty()) return emptyList()
 

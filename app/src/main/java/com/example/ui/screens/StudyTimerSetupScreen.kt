@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,13 +56,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
@@ -82,11 +83,24 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletGradientBottom
 import com.example.ui.theme.VioletGradientTop
-import com.example.ui.viewmodel.TimerUiState
+import com.example.ui.viewmodel.LiveStudyingUiState
+import com.example.ui.viewmodel.TimerSetupUiState
+import kotlinx.coroutines.flow.StateFlow
+
+private val SetupPrimaryGradientBrush =
+  Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
+private val SetupDisabledGradientBrush =
+  Brush.verticalGradient(
+    listOf(PrimaryIndigo.copy(alpha = 0.42f), PrimaryIndigo.copy(alpha = 0.42f))
+  )
+private val SetupUnselectedTileBrush =
+  Brush.verticalGradient(listOf(Color(0xFFF0F1FA), Color(0xFFEAECFA)))
 
 @Composable
 fun StudyTimerSetupScreen(
-  uiState: TimerUiState,
+  state: TimerSetupUiState,
+  isTimerActive: Boolean,
+  liveStudyingState: StateFlow<LiveStudyingUiState>,
   innerPadding: PaddingValues,
   timerPermissionChecklistShown: Boolean,
   onPermissionChecklistShown: () -> Unit,
@@ -108,10 +122,10 @@ fun StudyTimerSetupScreen(
   var showCustomPomodoroDialog by remember { mutableStateOf(false) }
   var showPermissionChecklistDialog by remember { mutableStateOf(false) }
 
-  val setup = uiState.setup
-  val selectedBook = uiState.books.firstOrNull { it.id == setup.selectedBookId }
+  val setup = state.setup
+  val selectedBook = state.books.firstOrNull { it.id == setup.selectedBookId }
   val selectedChapter =
-    uiState.chaptersForSelectedBook.firstOrNull { it.id == setup.selectedChapterId }
+    state.chaptersForSelectedBook.firstOrNull { it.id == setup.selectedChapterId }
   val canStart = selectedBook != null && selectedChapter != null
 
   Box(
@@ -158,46 +172,11 @@ fun StudyTimerSetupScreen(
 
       Spacer(modifier = Modifier.height(10.dp))
 
-      if (uiState.liveStudying.isRunningOrPaused) {
-        val activeMeta = uiState.liveStudying.activeMeta
-        val bannerShape = RoundedCornerShape(18.dp)
-        Surface(
+      if (isTimerActive) {
+        ActiveTimerSetupBanner(
+          liveStudyingState = liveStudyingState,
           onClick = onOpenActiveTimer,
-          shape = bannerShape,
-          color = LightGreenTint,
-          border = BorderStroke(1.dp, LightGreenBorder),
-          modifier = Modifier.fillMaxWidth().testTag("timer_setup_active_banner"),
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Column(modifier = Modifier.weight(1f)) {
-              Text(
-                text = "Active session running",
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary,
-              )
-              if (activeMeta != null) {
-                Text(
-                  text =
-                    "${activeMeta.bookName} • ${uiState.liveStudying.primaryClockDisplay}",
-                  fontSize = 13.sp,
-                  color = SuccessGreen,
-                  fontWeight = FontWeight.SemiBold,
-                )
-              }
-            }
-            Text(
-              text = "Open",
-              fontSize = 14.sp,
-              fontWeight = FontWeight.SemiBold,
-              color = PrimaryIndigo,
-            )
-          }
-        }
+        )
         Spacer(modifier = Modifier.height(14.dp))
       }
 
@@ -229,7 +208,7 @@ fun StudyTimerSetupScreen(
           Box {
             Surface(
               onClick = {
-                if (uiState.books.isEmpty()) onAddBookClick() else showBookMenu = true
+                if (state.books.isEmpty()) onAddBookClick() else showBookMenu = true
               },
               shape = RoundedCornerShape(14.dp),
               color = InputSurface,
@@ -277,14 +256,16 @@ fun StudyTimerSetupScreen(
               onDismissRequest = { showBookMenu = false },
               containerColor = CardSurface,
             ) {
-              uiState.books.forEach { book ->
-                DropdownMenuItem(
-                  text = { Text(book.name, color = TextPrimary) },
-                  onClick = {
-                    onSelectBook(book.id)
-                    showBookMenu = false
-                  },
-                )
+              state.books.forEach { book ->
+                key(book.id) {
+                  DropdownMenuItem(
+                    text = { Text(book.name, color = TextPrimary) },
+                    onClick = {
+                      onSelectBook(book.id)
+                      showBookMenu = false
+                    },
+                  )
+                }
               }
             }
           }
@@ -304,7 +285,7 @@ fun StudyTimerSetupScreen(
               onClick = {
                 when {
                   selectedBook == null -> onAddBookClick()
-                  uiState.chaptersForSelectedBook.isEmpty() -> onAddChapterClick(selectedBook.id)
+                  state.chaptersForSelectedBook.isEmpty() -> onAddChapterClick(selectedBook.id)
                   else -> showChapterMenu = true
                 }
               },
@@ -360,19 +341,21 @@ fun StudyTimerSetupScreen(
               onDismissRequest = { showChapterMenu = false },
               containerColor = CardSurface,
             ) {
-              uiState.chaptersForSelectedBook.forEach { chapter ->
-                DropdownMenuItem(
-                  text = {
-                    Text(
-                      text = "Chapter ${chapter.number}: ${chapter.name}",
-                      color = TextPrimary,
-                    )
-                  },
-                  onClick = {
-                    onSelectChapter(chapter.id)
-                    showChapterMenu = false
-                  },
-                )
+              state.chaptersForSelectedBook.forEach { chapter ->
+                key(chapter.id) {
+                  DropdownMenuItem(
+                    text = {
+                      Text(
+                        text = "Chapter ${chapter.number}: ${chapter.name}",
+                        color = TextPrimary,
+                      )
+                    },
+                    onClick = {
+                      onSelectChapter(chapter.id)
+                      showChapterMenu = false
+                    },
+                  )
+                }
               }
             }
           }
@@ -602,7 +585,7 @@ fun StudyTimerSetupScreen(
 
       Spacer(modifier = Modifier.height(22.dp))
 
-      val ctaEnabled = canStart && !uiState.liveStudying.isRunningOrPaused
+      val ctaEnabled = canStart && !isTimerActive
       val ctaShape = RoundedCornerShape(28.dp)
       Surface(
         onClick = {
@@ -633,16 +616,7 @@ fun StudyTimerSetupScreen(
           modifier =
             Modifier.fillMaxSize()
               .background(
-                if (ctaEnabled) {
-                  Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
-                } else {
-                  Brush.verticalGradient(
-                    listOf(
-                      PrimaryIndigo.copy(alpha = 0.42f),
-                      PrimaryIndigo.copy(alpha = 0.42f),
-                    )
-                  )
-                }
+                if (ctaEnabled) SetupPrimaryGradientBrush else SetupDisabledGradientBrush
               ),
           contentAlignment = Alignment.Center,
         ) {
@@ -725,6 +699,52 @@ fun StudyTimerSetupScreen(
 }
 
 @Composable
+private fun ActiveTimerSetupBanner(
+  liveStudyingState: StateFlow<LiveStudyingUiState>,
+  onClick: () -> Unit,
+) {
+  val liveStudying by liveStudyingState.collectAsStateWithLifecycle()
+  val activeMeta = liveStudying.activeMeta
+  val bannerShape = RoundedCornerShape(18.dp)
+  Surface(
+    onClick = onClick,
+    shape = bannerShape,
+    color = LightGreenTint,
+    border = BorderStroke(1.dp, LightGreenBorder),
+    modifier = Modifier.fillMaxWidth().testTag("timer_setup_active_banner"),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "Active session running",
+          fontSize = 15.sp,
+          fontWeight = FontWeight.Bold,
+          color = TextPrimary,
+        )
+        if (activeMeta != null) {
+          Text(
+            text = "${activeMeta.bookName} • ${liveStudying.primaryClockDisplay}",
+            fontSize = 13.sp,
+            color = SuccessGreen,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+      }
+      Text(
+        text = "Open",
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = PrimaryIndigo,
+      )
+    }
+  }
+}
+
+@Composable
 private fun TimerModeOptionCard(
   title: String,
   subtitle: String,
@@ -745,13 +765,7 @@ private fun TimerModeOptionCard(
     Column(
       modifier =
         Modifier.fillMaxSize()
-          .background(
-            if (selected) {
-              Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
-            } else {
-              Brush.verticalGradient(listOf(Color(0xFFF0F1FA), Color(0xFFEAECFA)))
-            }
-          )
+          .background(if (selected) SetupPrimaryGradientBrush else SetupUnselectedTileBrush)
           .padding(12.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.Center,

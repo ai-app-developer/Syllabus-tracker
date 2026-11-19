@@ -193,7 +193,7 @@ class ExampleRobolectricTest {
     assertTrue(BackupManager.parseAndValidate("{not json") is BackupValidationResult.Invalid)
 
     val wrongSchema =
-      json.replace("\"schemaVersion\": 1", "\"schemaVersion\": 99")
+      json.replace("\"schemaVersion\": ${BackupManager.CURRENT_SCHEMA_VERSION}", "\"schemaVersion\": 99")
     assertTrue(BackupManager.parseAndValidate(wrongSchema) is BackupValidationResult.Invalid)
 
     val brokenBookRef =
