@@ -192,9 +192,30 @@ class TimerRepository(
         alarmDeduplicator.clearSession(existing.sessionId)
         return
       }
+      val nowWall = clock.currentTimeMillis()
+      val nowElapsed = clock.elapsedRealtime()
+
+      if (existing.status == TimerStatus.PAUSED) {
+        _recoveryPrompt.value = null
+        onSyncAlarm(null)
+        val pauseStartElapsed = existing.pauseStartElapsedMs
+        val needsRebootRebase = pauseStartElapsed == null || nowElapsed < pauseStartElapsed
+        if (needsRebootRebase) {
+          val pausedWall = existing.pauseStartWallTimeMs ?: existing.lastKnownWallTimeMs
+          val offlineWallPause = (nowWall - pausedWall).coerceAtLeast(0L)
+          timerDao.updateRebootRebasedPausedState(
+            accumulatedPauseMs = existing.accumulatedPauseMs + offlineWallPause,
+            pauseStartElapsedMs = nowElapsed,
+            pauseStartWallTimeMs = nowWall,
+            lastKnownWallTimeMs = nowWall,
+          )
+        }
+        sessionStartedInCurrentProcess = true
+        onSyncService()
+        return
+      }
+
       if (existing.status == TimerStatus.RUNNING || existing.status == TimerStatus.BREAK) {
-        val nowWall = clock.currentTimeMillis()
-        val nowElapsed = clock.elapsedRealtime()
         val wallTargets =
           TimerAlarmScheduler.computeScheduledTargets(
             state = existing,
@@ -279,6 +300,8 @@ class TimerRepository(
           lapCount = 0,
           goalNotified = false,
           pomodoroCycle = 1,
+          phaseCarryMs = 0L,
+          pausedFromStatus = null,
           statusBeforeStopSummary = null,
         )
 
@@ -306,101 +329,160 @@ class TimerRepository(
     }
   }
 
-  suspend fun pauseSession() {
+  suspend fun pause() {
     mutex.withLock {
-      val current = timerDao.getActiveTimerStateOnce() ?: return
-      if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) return
-
-      val nowElapsed = clock.elapsedRealtime()
-      val nowWall = clock.currentTimeMillis()
-      val metrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
-
-      val updated =
-        current.copy(
-          status = TimerStatus.PAUSED,
-          accumulatedFocusMs = metrics.activeFocusMs,
-          accumulatedBreakMs = metrics.breakMs,
-          pauseStartElapsedMs = nowElapsed,
-          pauseStartWallTimeMs = nowWall,
-          lastKnownWallTimeMs = nowWall,
-          statusBeforeStopSummary = null,
-        )
-
-      runInTransaction {
-        timerDao.upsertActiveTimerState(updated)
-        timerDao.insertEvent(
-          SessionEventEntity(
-            sessionId = current.sessionId,
-            bookId = current.bookId,
-            chapterId = current.chapterId,
-            eventType = SessionEventType.PAUSE,
-            elapsedAtEventMs = metrics.activeFocusMs,
-            wallTimeMs = nowWall,
-          )
-        )
-      }
-      sessionStartedInCurrentProcess = true
-      onSyncAlarm(null)
-      onSyncService()
+      pauseLocked()
     }
+  }
+
+  suspend fun resume() {
+    mutex.withLock {
+      resumeLocked()
+    }
+  }
+
+  suspend fun pauseSession() {
+    pause()
   }
 
   suspend fun resumeSession() {
-    mutex.withLock {
-      val current = timerDao.getActiveTimerStateOnce() ?: return
-      if (current.status != TimerStatus.PAUSED && current.status != TimerStatus.STOP_SUMMARY) return
-
-      val nowElapsed = clock.elapsedRealtime()
-      val nowWall = clock.currentTimeMillis()
-      val targetStatus =
-        if (current.status == TimerStatus.STOP_SUMMARY) {
-          when (current.statusBeforeStopSummary) {
-            TimerStatus.BREAK -> TimerStatus.BREAK
-            else -> TimerStatus.RUNNING
-          }
-        } else {
-          TimerStatus.RUNNING
-        }
-
-      val extraPause =
-        current.pauseStartElapsedMs?.let { (nowElapsed - it).coerceAtLeast(0L) } ?: 0L
-
-      val updated =
-        current.copy(
-          status = targetStatus,
-          phaseStartElapsedMs = nowElapsed,
-          phaseStartWallTimeMs = nowWall,
-          accumulatedPauseMs = current.accumulatedPauseMs + extraPause,
-          pauseStartElapsedMs = null,
-          pauseStartWallTimeMs = null,
-          lastKnownWallTimeMs = nowWall,
-          statusBeforeStopSummary = null,
-        )
-
-      runInTransaction {
-        timerDao.upsertActiveTimerState(updated)
-        timerDao.insertEvent(
-          SessionEventEntity(
-            sessionId = current.sessionId,
-            bookId = current.bookId,
-            chapterId = current.chapterId,
-            eventType = SessionEventType.RESUME,
-            elapsedAtEventMs = current.accumulatedFocusMs,
-            wallTimeMs = nowWall,
-          )
-        )
-      }
-      sessionStartedInCurrentProcess = true
-      onSyncAlarm(updated)
-      onSyncService()
-    }
+    resume()
   }
 
   suspend fun togglePauseResume() {
-    val current = timerDao.getActiveTimerStateOnce() ?: return
-    when (current.status) {
-      TimerStatus.RUNNING, TimerStatus.BREAK -> pauseSession()
-      TimerStatus.PAUSED, TimerStatus.STOP_SUMMARY -> resumeSession()
+    mutex.withLock {
+      val current = timerDao.getActiveTimerStateOnce() ?: return
+      when (current.status) {
+        TimerStatus.RUNNING, TimerStatus.BREAK -> pauseLocked(current)
+        TimerStatus.PAUSED, TimerStatus.STOP_SUMMARY -> resumeLocked(current)
+      }
+    }
+  }
+
+  private suspend fun pauseLocked(preloaded: ActiveTimerStateEntity? = null) {
+    val current = preloaded ?: timerDao.getActiveTimerStateOnce() ?: return
+    if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) return
+
+    val nowElapsed = clock.elapsedRealtime()
+    val nowWall = clock.currentTimeMillis()
+    val runningMetrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
+    val carryMs = runningMetrics.currentPhaseElapsedMs
+    val pausedPhase = current.status
+    val updated =
+      current.copy(
+        status = TimerStatus.PAUSED,
+        pausedFromStatus = pausedPhase,
+        phaseCarryMs = carryMs,
+        pauseStartElapsedMs = nowElapsed,
+        pauseStartWallTimeMs = nowWall,
+        lastKnownWallTimeMs = nowWall,
+      )
+    val metrics = TimerMath.computeMetrics(updated, nowElapsed, nowWall)
+
+    runInTransaction {
+      timerDao.updatePauseState(
+        status = TimerStatus.PAUSED,
+        pausedFromStatus = pausedPhase,
+        phaseCarryMs = carryMs,
+        pauseStartElapsedMs = nowElapsed,
+        pauseStartWallTimeMs = nowWall,
+        lastKnownWallTimeMs = nowWall,
+      )
+      timerDao.insertEvent(
+        SessionEventEntity(
+          sessionId = current.sessionId,
+          bookId = current.bookId,
+          chapterId = current.chapterId,
+          eventType = SessionEventType.PAUSE,
+          elapsedAtEventMs = metrics.activeFocusMs,
+          wallTimeMs = nowWall,
+        )
+      )
+    }
+    sessionStartedInCurrentProcess = true
+    onSyncAlarm(null)
+    onSyncService()
+    if (BuildConfig.DEBUG) {
+      Log.d(
+        "TimerRepo",
+        "pause: phaseCarryMs=$carryMs phaseElapsed=${metrics.currentPhaseElapsedMs} accumulatedFocusMs=${current.accumulatedFocusMs} totalPause=${metrics.pauseMs}",
+      )
+    }
+  }
+
+  private suspend fun resumeLocked(preloaded: ActiveTimerStateEntity? = null) {
+    val current = preloaded ?: timerDao.getActiveTimerStateOnce() ?: return
+    if (current.status != TimerStatus.PAUSED && current.status != TimerStatus.STOP_SUMMARY) return
+
+    val nowElapsed = clock.elapsedRealtime()
+    val nowWall = clock.currentTimeMillis()
+    val targetStatus =
+      when (current.status) {
+        TimerStatus.PAUSED -> current.pausedFromStatus ?: TimerStatus.RUNNING
+        TimerStatus.STOP_SUMMARY ->
+          when (current.statusBeforeStopSummary) {
+            TimerStatus.BREAK -> TimerStatus.BREAK
+            TimerStatus.PAUSED -> current.pausedFromStatus ?: TimerStatus.RUNNING
+            else -> TimerStatus.RUNNING
+          }
+        else -> TimerStatus.RUNNING
+      }
+
+    val pauseStartElapsed = current.pauseStartElapsedMs
+    val extraPause =
+      when {
+        pauseStartElapsed != null && nowElapsed >= pauseStartElapsed ->
+          (nowElapsed - pauseStartElapsed).coerceAtLeast(0L)
+        current.pauseStartWallTimeMs != null ->
+          (nowWall - current.pauseStartWallTimeMs).coerceAtLeast(0L)
+        else -> 0L
+      }
+
+    val newPhaseStartElapsed = nowElapsed
+    val newPhaseStartWall = nowWall
+    val newAccumulatedPause = current.accumulatedPauseMs + extraPause
+
+    val updated =
+      current.copy(
+        status = targetStatus,
+        phaseStartElapsedMs = newPhaseStartElapsed,
+        phaseStartWallTimeMs = newPhaseStartWall,
+        accumulatedPauseMs = newAccumulatedPause,
+        pauseStartElapsedMs = null,
+        pauseStartWallTimeMs = null,
+        lastKnownWallTimeMs = nowWall,
+        pausedFromStatus = null,
+        statusBeforeStopSummary = null,
+      )
+    val metrics = TimerMath.computeMetrics(updated, nowElapsed, nowWall)
+
+    runInTransaction {
+      timerDao.updateResumeState(
+        status = targetStatus,
+        phaseStartElapsedMs = newPhaseStartElapsed,
+        phaseStartWallTimeMs = newPhaseStartWall,
+        accumulatedPauseMs = newAccumulatedPause,
+        lastKnownWallTimeMs = nowWall,
+      )
+      timerDao.insertEvent(
+        SessionEventEntity(
+          sessionId = current.sessionId,
+          bookId = current.bookId,
+          chapterId = current.chapterId,
+          eventType = SessionEventType.RESUME,
+          elapsedAtEventMs = metrics.activeFocusMs,
+          wallTimeMs = nowWall,
+        )
+      )
+    }
+    sessionStartedInCurrentProcess = true
+    onSyncAlarm(updated)
+    onSyncService()
+    if (BuildConfig.DEBUG) {
+      Log.d(
+        "TimerRepo",
+        "resume: phaseCarryMs=${updated.phaseCarryMs} phaseElapsed=${metrics.currentPhaseElapsedMs} accumulatedFocusMs=${updated.accumulatedFocusMs} totalPause=${metrics.pauseMs}",
+      )
     }
   }
 
@@ -473,19 +555,16 @@ class TimerRepository(
       val nowWall = clock.currentTimeMillis()
       val metrics = TimerMath.computeMetrics(current, nowElapsed, nowWall)
 
-      val updated =
-        current.copy(
-          status = TimerStatus.STOP_SUMMARY,
-          statusBeforeStopSummary = current.status,
-          accumulatedFocusMs = metrics.activeFocusMs,
-          accumulatedBreakMs = metrics.breakMs,
-          accumulatedPauseMs = metrics.pauseMs,
-          pauseStartElapsedMs = nowElapsed,
-          pauseStartWallTimeMs = nowWall,
-          lastKnownWallTimeMs = nowWall,
-        )
-
-      timerDao.upsertActiveTimerState(updated)
+      timerDao.updateStopSummaryState(
+        status = TimerStatus.STOP_SUMMARY,
+        pausedFromStatus = current.pausedFromStatus,
+        statusBeforeStopSummary = current.status,
+        phaseCarryMs = metrics.currentPhaseElapsedMs,
+        accumulatedPauseMs = metrics.pauseMs,
+        pauseStartElapsedMs = nowElapsed,
+        pauseStartWallTimeMs = nowWall,
+        lastKnownWallTimeMs = nowWall,
+      )
       sessionStartedInCurrentProcess = true
       onSyncAlarm(null)
       onSyncService()
@@ -493,7 +572,7 @@ class TimerRepository(
   }
 
   suspend fun resumeFromStopSummary() {
-    resumeSession()
+    resume()
   }
 
   suspend fun saveCurrentSession(finalNotes: String? = null): Boolean {
@@ -548,6 +627,9 @@ class TimerRepository(
           accumulatedBreakMs = metrics.breakMs,
           lastKnownWallTimeMs = nowWall,
           pomodoroCycle = current.pomodoroCycle + 1,
+          phaseCarryMs = 0L,
+          pausedFromStatus = null,
+          statusBeforeStopSummary = null,
         )
 
       runInTransaction {
@@ -631,6 +713,9 @@ class TimerRepository(
               phaseStartWallTimeMs = nowWall,
               accumulatedFocusMs = newAccumulatedFocus,
               lastKnownWallTimeMs = nowWall,
+              phaseCarryMs = 0L,
+              pausedFromStatus = null,
+              statusBeforeStopSummary = null,
             )
 
           runInTransaction {
@@ -686,6 +771,9 @@ class TimerRepository(
               accumulatedBreakMs = newAccumulatedBreak,
               lastKnownWallTimeMs = nowWall,
               pomodoroCycle = nextCycle,
+              phaseCarryMs = 0L,
+              pausedFromStatus = null,
+              statusBeforeStopSummary = null,
             )
 
           timerDao.upsertActiveTimerState(updated)
@@ -801,6 +889,9 @@ class TimerRepository(
                     accumulatedFocusMs =
                       workingState.accumulatedFocusMs + workingState.focusDurationMs,
                     lastKnownWallTimeMs = nowWall,
+                    phaseCarryMs = 0L,
+                    pausedFromStatus = null,
+                    statusBeforeStopSummary = null,
                   )
                 timerDao.upsertActiveTimerState(workingState)
                 lateNotifications.add(
@@ -828,6 +919,9 @@ class TimerRepository(
                       workingState.accumulatedBreakMs + workingState.breakDurationMs,
                     lastKnownWallTimeMs = nowWall,
                     pomodoroCycle = nextCycle,
+                    phaseCarryMs = 0L,
+                    pausedFromStatus = null,
+                    statusBeforeStopSummary = null,
                   )
                 timerDao.upsertActiveTimerState(workingState)
                 lateNotifications.add(
@@ -879,6 +973,33 @@ class TimerRepository(
       val nowWall = clock.currentTimeMillis()
       val metrics = TimerMath.computeLastKnownRecoveryMetrics(saved)
 
+      if (saved.status == TimerStatus.PAUSED) {
+        val pauseStartElapsed = saved.pauseStartElapsedMs
+        val needsRebootRebase = pauseStartElapsed == null || nowElapsed < pauseStartElapsed
+        val offlinePause =
+          if (needsRebootRebase) {
+            val pausedWall = saved.pauseStartWallTimeMs ?: saved.lastKnownWallTimeMs
+            (nowWall - pausedWall).coerceAtLeast(0L)
+          } else {
+            0L
+          }
+        val restored =
+          saved.copy(
+            status = TimerStatus.PAUSED,
+            pausedFromStatus = saved.pausedFromStatus ?: TimerStatus.RUNNING,
+            accumulatedPauseMs = saved.accumulatedPauseMs + offlinePause,
+            pauseStartElapsedMs = if (needsRebootRebase) nowElapsed else pauseStartElapsed,
+            pauseStartWallTimeMs = if (needsRebootRebase) nowWall else saved.pauseStartWallTimeMs,
+            lastKnownWallTimeMs = nowWall,
+          )
+        timerDao.upsertActiveTimerState(restored)
+        sessionStartedInCurrentProcess = true
+        _recoveryPrompt.value = null
+        onSyncAlarm(null)
+        onSyncService()
+        return
+      }
+
       val goalAlreadyPassedBeforeDeath =
         saved.goalMs != null && metrics.activeFocusMs >= saved.goalMs
       val resolvedGoalNotified = saved.goalNotified || goalAlreadyPassedBeforeDeath
@@ -890,13 +1011,21 @@ class TimerRepository(
       }
 
       if (saved.mode == TimerMode.POMODORO) {
-        val wallDelta = (saved.lastKnownWallTimeMs - saved.phaseStartWallTimeMs).coerceAtLeast(0L)
-        if (saved.status == TimerStatus.RUNNING && saved.focusDurationMs > 0L && wallDelta >= saved.focusDurationMs) {
+        val phaseAtLastKnown = metrics.currentPhaseElapsedMs
+        if (
+          saved.status == TimerStatus.RUNNING &&
+            saved.focusDurationMs > 0L &&
+            phaseAtLastKnown >= saved.focusDurationMs
+        ) {
           alarmDeduplicator.markSuppressed(
             buildEventKey(saved.sessionId, saved.pomodoroCycle, TimerAlarmEventType.FOCUS_END),
             saved.sessionId,
           )
-        } else if (saved.status == TimerStatus.BREAK && saved.breakDurationMs > 0L && wallDelta >= saved.breakDurationMs) {
+        } else if (
+          saved.status == TimerStatus.BREAK &&
+            saved.breakDurationMs > 0L &&
+            phaseAtLastKnown >= saved.breakDurationMs
+        ) {
           alarmDeduplicator.markSuppressed(
             buildEventKey(saved.sessionId, saved.pomodoroCycle, TimerAlarmEventType.BREAK_END),
             saved.sessionId,
@@ -905,8 +1034,13 @@ class TimerRepository(
       }
 
       val targetStatus =
-        when (saved.status) {
-          TimerStatus.BREAK -> TimerStatus.BREAK
+        when {
+          saved.status == TimerStatus.BREAK -> TimerStatus.BREAK
+          saved.status == TimerStatus.STOP_SUMMARY &&
+            (saved.statusBeforeStopSummary == TimerStatus.BREAK ||
+              (saved.statusBeforeStopSummary == TimerStatus.PAUSED &&
+                saved.pausedFromStatus == TimerStatus.BREAK)) ->
+            TimerStatus.BREAK
           else -> TimerStatus.RUNNING
         }
 
@@ -915,13 +1049,15 @@ class TimerRepository(
           status = targetStatus,
           phaseStartElapsedMs = nowElapsed,
           phaseStartWallTimeMs = nowWall,
-          accumulatedFocusMs = metrics.activeFocusMs,
-          accumulatedBreakMs = metrics.breakMs,
+          phaseCarryMs = metrics.currentPhaseElapsedMs,
+          accumulatedFocusMs = saved.accumulatedFocusMs,
+          accumulatedBreakMs = saved.accumulatedBreakMs,
           accumulatedPauseMs = metrics.pauseMs,
           pauseStartElapsedMs = null,
           pauseStartWallTimeMs = null,
           lastKnownWallTimeMs = nowWall,
           goalNotified = resolvedGoalNotified,
+          pausedFromStatus = null,
           statusBeforeStopSummary = null,
         )
 

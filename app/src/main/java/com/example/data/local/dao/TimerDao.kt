@@ -69,6 +69,92 @@ interface TimerDao {
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun upsertActiveTimerState(state: ActiveTimerStateEntity)
 
+  @Query(
+    """
+    UPDATE active_timer_state
+    SET status = :status,
+        pausedFromStatus = :pausedFromStatus,
+        phaseCarryMs = :phaseCarryMs,
+        pauseStartElapsedMs = :pauseStartElapsedMs,
+        pauseStartWallTimeMs = :pauseStartWallTimeMs,
+        lastKnownWallTimeMs = :lastKnownWallTimeMs
+    WHERE id = 1
+    """
+  )
+  suspend fun updatePauseState(
+    status: String,
+    pausedFromStatus: String,
+    phaseCarryMs: Long,
+    pauseStartElapsedMs: Long,
+    pauseStartWallTimeMs: Long,
+    lastKnownWallTimeMs: Long,
+  )
+
+  @Query(
+    """
+    UPDATE active_timer_state
+    SET status = :status,
+        pausedFromStatus = NULL,
+        statusBeforeStopSummary = NULL,
+        phaseStartElapsedMs = :phaseStartElapsedMs,
+        phaseStartWallTimeMs = :phaseStartWallTimeMs,
+        accumulatedPauseMs = :accumulatedPauseMs,
+        pauseStartElapsedMs = NULL,
+        pauseStartWallTimeMs = NULL,
+        lastKnownWallTimeMs = :lastKnownWallTimeMs
+    WHERE id = 1
+    """
+  )
+  suspend fun updateResumeState(
+    status: String,
+    phaseStartElapsedMs: Long,
+    phaseStartWallTimeMs: Long,
+    accumulatedPauseMs: Long,
+    lastKnownWallTimeMs: Long,
+  )
+
+  @Query(
+    """
+    UPDATE active_timer_state
+    SET status = :status,
+        pausedFromStatus = :pausedFromStatus,
+        statusBeforeStopSummary = :statusBeforeStopSummary,
+        phaseCarryMs = :phaseCarryMs,
+        accumulatedPauseMs = :accumulatedPauseMs,
+        pauseStartElapsedMs = :pauseStartElapsedMs,
+        pauseStartWallTimeMs = :pauseStartWallTimeMs,
+        lastKnownWallTimeMs = :lastKnownWallTimeMs
+    WHERE id = 1
+    """
+  )
+  suspend fun updateStopSummaryState(
+    status: String,
+    pausedFromStatus: String?,
+    statusBeforeStopSummary: String?,
+    phaseCarryMs: Long,
+    accumulatedPauseMs: Long,
+    pauseStartElapsedMs: Long,
+    pauseStartWallTimeMs: Long,
+    lastKnownWallTimeMs: Long,
+  )
+
+  @Query(
+    """
+    UPDATE active_timer_state
+    SET accumulatedPauseMs = :accumulatedPauseMs,
+        pauseStartElapsedMs = :pauseStartElapsedMs,
+        pauseStartWallTimeMs = :pauseStartWallTimeMs,
+        lastKnownWallTimeMs = :lastKnownWallTimeMs
+    WHERE id = 1 AND status = 'PAUSED'
+    """
+  )
+  suspend fun updateRebootRebasedPausedState(
+    accumulatedPauseMs: Long,
+    pauseStartElapsedMs: Long,
+    pauseStartWallTimeMs: Long,
+    lastKnownWallTimeMs: Long,
+  )
+
   @Query("DELETE FROM active_timer_state")
   suspend fun clearActiveTimerState()
 

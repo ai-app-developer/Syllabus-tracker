@@ -73,68 +73,63 @@ object TimerMath {
     nowElapsedMs: Long,
     nowWallTimeMs: Long = System.currentTimeMillis(),
   ): ComputedTimerMetrics {
-    val activeStatus =
-      if (state.status == TimerStatus.STOP_SUMMARY) {
-        state.statusBeforeStopSummary ?: TimerStatus.PAUSED
+    val liveDelta =
+      if (state.status == TimerStatus.RUNNING || state.status == TimerStatus.BREAK) {
+        if (nowElapsedMs >= state.phaseStartElapsedMs) {
+          (nowElapsedMs - state.phaseStartElapsedMs).coerceAtLeast(0L)
+        } else {
+          (nowWallTimeMs - state.phaseStartWallTimeMs).coerceAtLeast(0L)
+        }
       } else {
-        state.status
+        0L
       }
 
-    // Fallback gracefully if a monotonic clock anomaly ever occurs before recovery rebasing.
-    val validElapsedDelta = (nowElapsedMs - state.phaseStartElapsedMs).coerceAtLeast(0L)
-    val runningPhaseDelta =
-      if (nowElapsedMs >= state.phaseStartElapsedMs) {
-        validElapsedDelta
-      } else {
-        (nowWallTimeMs - state.phaseStartWallTimeMs).coerceAtLeast(0L)
+    val phaseElapsed = (state.phaseCarryMs + liveDelta).coerceAtLeast(0L)
+
+    val effectivePhaseStatus =
+      when (state.status) {
+        TimerStatus.RUNNING, TimerStatus.BREAK -> state.status
+        TimerStatus.PAUSED -> state.pausedFromStatus ?: TimerStatus.RUNNING
+        TimerStatus.STOP_SUMMARY ->
+          when (state.statusBeforeStopSummary) {
+            TimerStatus.BREAK -> TimerStatus.BREAK
+            TimerStatus.PAUSED -> state.pausedFromStatus ?: TimerStatus.RUNNING
+            else -> TimerStatus.RUNNING
+          }
+        else -> TimerStatus.RUNNING
       }
 
     val focusMs: Long
     val breakMs: Long
-    val pauseMs: Long
-    val phaseElapsed: Long
-
-    when (activeStatus) {
-      TimerStatus.RUNNING -> {
-        phaseElapsed = runningPhaseDelta
-        focusMs =
-          if (state.status == TimerStatus.STOP_SUMMARY) {
-            state.accumulatedFocusMs
-          } else {
-            state.accumulatedFocusMs + runningPhaseDelta
-          }
-        breakMs = state.accumulatedBreakMs
-        pauseMs = state.accumulatedPauseMs
-      }
+    when (effectivePhaseStatus) {
       TimerStatus.BREAK -> {
-        phaseElapsed = runningPhaseDelta
         focusMs = state.accumulatedFocusMs
-        breakMs =
-          if (state.status == TimerStatus.STOP_SUMMARY) {
-            state.accumulatedBreakMs
-          } else {
-            state.accumulatedBreakMs + runningPhaseDelta
-          }
-        pauseMs = state.accumulatedPauseMs
+        breakMs = state.accumulatedBreakMs + phaseElapsed
       }
       else -> {
-        phaseElapsed = 0L
-        focusMs = state.accumulatedFocusMs
+        focusMs = state.accumulatedFocusMs + phaseElapsed
         breakMs = state.accumulatedBreakMs
-        val pauseStart = state.pauseStartElapsedMs
-        val extraPause =
-          if (pauseStart != null && state.status == TimerStatus.PAUSED && nowElapsedMs >= pauseStart) {
-            nowElapsedMs - pauseStart
-          } else {
-            0L
-          }
-        pauseMs = state.accumulatedPauseMs + extraPause
       }
     }
 
+    val pauseStartElapsed = state.pauseStartElapsedMs
+    val openPause =
+      if (state.status == TimerStatus.PAUSED && pauseStartElapsed != null) {
+        if (nowElapsedMs >= pauseStartElapsed) {
+          (nowElapsedMs - pauseStartElapsed).coerceAtLeast(0L)
+        } else {
+          val pauseStartWall = state.pauseStartWallTimeMs ?: state.lastKnownWallTimeMs
+          (nowWallTimeMs - pauseStartWall).coerceAtLeast(0L)
+        }
+      } else {
+        0L
+      }
+    val pauseMs = state.accumulatedPauseMs + openPause
+
     val phaseDurationMs =
       when {
-        state.mode == TimerMode.POMODORO && activeStatus == TimerStatus.BREAK -> state.breakDurationMs
+        state.mode == TimerMode.POMODORO && effectivePhaseStatus == TimerStatus.BREAK ->
+          state.breakDurationMs
         state.mode == TimerMode.POMODORO -> state.focusDurationMs
         else -> 0L
       }
@@ -179,38 +174,54 @@ object TimerMath {
    * Computes conservative recovery focus time up to `lastKnownWallTimeMs` in case of crash/kill/reboot.
    */
   fun computeLastKnownRecoveryMetrics(state: ActiveTimerStateEntity): ComputedTimerMetrics {
-    val activeStatus =
-      if (state.status == TimerStatus.STOP_SUMMARY) {
-        state.statusBeforeStopSummary ?: TimerStatus.PAUSED
-      } else {
-        state.status
+    val effectivePhaseStatus =
+      when (state.status) {
+        TimerStatus.RUNNING, TimerStatus.BREAK -> state.status
+        TimerStatus.PAUSED -> state.pausedFromStatus ?: TimerStatus.RUNNING
+        TimerStatus.STOP_SUMMARY ->
+          when (state.statusBeforeStopSummary) {
+            TimerStatus.BREAK -> TimerStatus.BREAK
+            TimerStatus.PAUSED -> state.pausedFromStatus ?: TimerStatus.RUNNING
+            else -> TimerStatus.RUNNING
+          }
+        else -> TimerStatus.RUNNING
       }
 
-    val wallDelta = (state.lastKnownWallTimeMs - state.phaseStartWallTimeMs).coerceAtLeast(0L)
-    val capFocus =
-      when (activeStatus) {
-        TimerStatus.RUNNING ->
-          if (state.mode == TimerMode.POMODORO && state.focusDurationMs > 0L) {
-            wallDelta.coerceAtMost(state.focusDurationMs)
-          } else {
-            wallDelta
-          }
+    val wallDelta =
+      if (state.status == TimerStatus.RUNNING || state.status == TimerStatus.BREAK) {
+        (state.lastKnownWallTimeMs - state.phaseStartWallTimeMs).coerceAtLeast(0L)
+      } else {
+        0L
+      }
+    val rawPhaseElapsed = (state.phaseCarryMs + wallDelta).coerceAtLeast(0L)
+    val phaseDurationMs =
+      when {
+        state.mode == TimerMode.POMODORO && effectivePhaseStatus == TimerStatus.BREAK ->
+          state.breakDurationMs
+        state.mode == TimerMode.POMODORO -> state.focusDurationMs
         else -> 0L
       }
-    val capBreak =
-      when (activeStatus) {
-        TimerStatus.BREAK ->
-          if (state.mode == TimerMode.POMODORO && state.breakDurationMs > 0L) {
-            wallDelta.coerceAtMost(state.breakDurationMs)
-          } else {
-            wallDelta
-          }
-        else -> 0L
+    val cappedPhaseElapsed =
+      if (state.mode == TimerMode.POMODORO && phaseDurationMs > 0L) {
+        rawPhaseElapsed.coerceAtMost(phaseDurationMs)
+      } else {
+        rawPhaseElapsed
       }
-    val focusMs = state.accumulatedFocusMs + capFocus
-    val breakMs = state.accumulatedBreakMs + capBreak
+
+    val focusMs =
+      if (effectivePhaseStatus == TimerStatus.RUNNING) {
+        state.accumulatedFocusMs + cappedPhaseElapsed
+      } else {
+        state.accumulatedFocusMs
+      }
+    val breakMs =
+      if (effectivePhaseStatus == TimerStatus.BREAK) {
+        state.accumulatedBreakMs + cappedPhaseElapsed
+      } else {
+        state.accumulatedBreakMs
+      }
     val extraPause =
-      if (state.pauseStartWallTimeMs != null && activeStatus == TimerStatus.PAUSED) {
+      if (state.status == TimerStatus.PAUSED && state.pauseStartWallTimeMs != null) {
         (state.lastKnownWallTimeMs - state.pauseStartWallTimeMs).coerceAtLeast(0L)
       } else {
         0L
@@ -219,20 +230,26 @@ object TimerMath {
     val total = focusMs + pauseMs
     val focusPct =
       if (total <= 0L) 100 else ((focusMs * 100.0) / total).roundToInt().coerceIn(0, 100)
+    val remainingMs =
+      if (phaseDurationMs > 0L) (phaseDurationMs - cappedPhaseElapsed).coerceAtLeast(0L) else 0L
+    val progressFraction =
+      when {
+        state.mode == TimerMode.POMODORO && phaseDurationMs > 0L ->
+          (cappedPhaseElapsed.toFloat() / phaseDurationMs.toFloat()).coerceIn(0f, 1f)
+        state.goalMs != null && state.goalMs > 0L ->
+          (focusMs.toFloat() / state.goalMs.toFloat()).coerceIn(0f, 1f)
+        else ->
+          ((focusMs % 3_600_000L).toFloat() / 3_600_000f).coerceIn(0f, 1f)
+      }
 
     return ComputedTimerMetrics(
       activeFocusMs = focusMs,
       pauseMs = pauseMs,
       breakMs = breakMs,
-      currentPhaseElapsedMs = capFocus.coerceAtLeast(capBreak),
-      currentPhaseRemainingMs = 0L,
+      currentPhaseElapsedMs = cappedPhaseElapsed,
+      currentPhaseRemainingMs = remainingMs,
       focusPercent = focusPct,
-      progressFraction =
-        if (state.goalMs != null && state.goalMs > 0L) {
-          (focusMs.toFloat() / state.goalMs.toFloat()).coerceIn(0f, 1f)
-        } else {
-          0f
-        },
+      progressFraction = progressFraction,
     )
   }
 

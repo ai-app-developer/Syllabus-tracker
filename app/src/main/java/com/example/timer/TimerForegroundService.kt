@@ -32,6 +32,8 @@ class TimerForegroundService : Service() {
   private var boundaryJob: Job? = null
   private var heartbeatJob: Job? = null
 
+  private var isForegroundStarted = false
+
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onCreate() {
@@ -47,14 +49,35 @@ class TimerForegroundService : Service() {
     }
 
     val action = intent?.action ?: ACTION_SYNC
+    if (action == ACTION_STOP_SERVICE) {
+      boundaryJob?.cancel()
+      stateObserverJob?.cancel()
+      heartbeatJob?.cancel()
+      isForegroundStarted = false
+      stopForeground(STOP_FOREGROUND_REMOVE)
+      NotificationHelper.cancelOngoingTimerNotification(this)
+      stopSelf()
+      return START_NOT_STICKY
+    }
+
+    if (!isForegroundStarted) {
+      callStartForeground(NotificationHelper.buildSyncingTimerNotification(this))
+      isForegroundStarted = true
+    }
+
     serviceScope.launch {
       val repo = app.timerRepository
-      if (action == ACTION_TOGGLE_PAUSE_RESUME) {
-        repo.togglePauseResume()
+      when (action) {
+        ACTION_PAUSE -> repo.pause()
+        ACTION_RESUME -> repo.resume()
+        ACTION_TOGGLE_PAUSE_RESUME -> repo.togglePauseResume()
+        ACTION_STOP -> repo.requestStopSummary()
+        ACTION_START, ACTION_SYNC -> Unit // Sync/restore only; never initialize or reset session state.
       }
 
       val meta = app.loadActiveSessionMetadataOnce()
       if (meta == null) {
+        isForegroundStarted = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         NotificationHelper.cancelOngoingTimerNotification(this@TimerForegroundService)
         stopSelf()
@@ -74,20 +97,24 @@ class TimerForegroundService : Service() {
           nowWallTimeMs = nowWall,
         )
 
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        startForeground(
-          NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID,
-          notification,
-          ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-        )
-      } else {
-        startForeground(NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID, notification)
-      }
-
+      callStartForeground(notification)
+      isForegroundStarted = true
       startOngoingObservationAndHeartbeat(app)
     }
 
     return START_STICKY
+  }
+
+  private fun callStartForeground(notification: android.app.Notification) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      startForeground(
+        NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID,
+        notification,
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+      )
+    } else {
+      startForeground(NotificationHelper.TIMER_ONGOING_NOTIFICATION_ID, notification)
+    }
   }
 
   private fun startOngoingObservationAndHeartbeat(app: SyllabusApplication) {
@@ -100,6 +127,7 @@ class TimerForegroundService : Service() {
             .collectLatest { state ->
               if (state == null) {
                 boundaryJob?.cancel()
+                isForegroundStarted = false
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 NotificationHelper.cancelOngoingTimerNotification(this@TimerForegroundService)
                 stopSelf()
@@ -192,6 +220,7 @@ class TimerForegroundService : Service() {
   }
 
   override fun onDestroy() {
+    isForegroundStarted = false
     stateObserverJob?.cancel()
     boundaryJob?.cancel()
     heartbeatJob?.cancel()
@@ -200,6 +229,10 @@ class TimerForegroundService : Service() {
   }
 
   companion object {
+    const val ACTION_START = "com.example.timer.ACTION_START"
+    const val ACTION_PAUSE = "com.example.timer.ACTION_PAUSE"
+    const val ACTION_RESUME = "com.example.timer.ACTION_RESUME"
+    const val ACTION_STOP = "com.example.timer.ACTION_STOP"
     const val ACTION_SYNC = "com.example.timer.ACTION_SYNC"
     const val ACTION_TOGGLE_PAUSE_RESUME = "com.example.timer.ACTION_TOGGLE_PAUSE_RESUME"
     const val ACTION_STOP_SERVICE = "com.example.timer.ACTION_STOP_SERVICE"

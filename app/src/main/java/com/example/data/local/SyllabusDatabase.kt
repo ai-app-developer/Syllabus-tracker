@@ -25,7 +25,7 @@ import com.example.data.local.entity.SessionEventEntity
       ReadingGoalEntity::class,
       ActiveTimerStateEntity::class,
     ],
-  version = 3,
+  version = 4,
   exportSchema = false,
 )
 abstract class SyllabusDatabase : RoomDatabase() {
@@ -177,6 +177,18 @@ abstract class SyllabusDatabase : RoomDatabase() {
         }
       }
 
+    val MIGRATION_3_4 =
+      object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          db.execSQL(
+            "ALTER TABLE `active_timer_state` ADD COLUMN `phaseCarryMs` INTEGER NOT NULL DEFAULT 0"
+          )
+          db.execSQL(
+            "ALTER TABLE `active_timer_state` ADD COLUMN `pausedFromStatus` TEXT"
+          )
+        }
+      }
+
     @Volatile
     private var INSTANCE: SyllabusDatabase? = null
 
@@ -190,7 +202,7 @@ abstract class SyllabusDatabase : RoomDatabase() {
                 "syllabus_tracker.db",
               )
               .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-              .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+              .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
               .build()
               .also { INSTANCE = it }
         }

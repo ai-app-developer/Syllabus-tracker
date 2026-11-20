@@ -130,7 +130,11 @@ class TimerRobolectricTest {
     val migrated =
       Room.databaseBuilder(context, SyllabusDatabase::class.java, "migration_v1_test.db")
         .allowMainThreadQueries()
-        .addMigrations(SyllabusDatabase.MIGRATION_1_2, SyllabusDatabase.MIGRATION_2_3)
+        .addMigrations(
+          SyllabusDatabase.MIGRATION_1_2,
+          SyllabusDatabase.MIGRATION_2_3,
+          SyllabusDatabase.MIGRATION_3_4,
+        )
         .build()
 
     val books = migrated.syllabusDao().getAllBooksOnce()
@@ -217,7 +221,11 @@ class TimerRobolectricTest {
       val migrated =
         Room.databaseBuilder(context, SyllabusDatabase::class.java, "migration_v2_test.db")
           .allowMainThreadQueries()
-          .addMigrations(SyllabusDatabase.MIGRATION_1_2, SyllabusDatabase.MIGRATION_2_3)
+          .addMigrations(
+            SyllabusDatabase.MIGRATION_1_2,
+            SyllabusDatabase.MIGRATION_2_3,
+            SyllabusDatabase.MIGRATION_3_4,
+          )
           .build()
 
       assertEquals(1, migrated.syllabusDao().getAllBooksOnce().size)
@@ -240,6 +248,85 @@ class TimerRobolectricTest {
       assertTrue("index_chapters_completedAt" in indexNames)
       assertTrue("index_reading_sessions_sessionDate_startWallTimeMs" in indexNames)
       assertTrue("index_reading_sessions_startWallTimeMs" in indexNames)
+
+      migrated.close()
+      dbFile.delete()
+    }
+
+  @Test
+  fun `migration 3 to 4 adds phaseCarryMs and pausedFromStatus without losing active timer or sessions`() =
+    runTest {
+      val dbFile = context.getDatabasePath("migration_v3_test.db")
+      dbFile.parentFile?.mkdirs()
+      if (dbFile.exists()) dbFile.delete()
+
+      val factory = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory()
+      val helper =
+        factory.create(
+          androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name("migration_v3_test.db")
+            .callback(
+              object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(3) {
+                override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                  db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `books` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+                  )
+                  db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `chapters` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `bookId` INTEGER NOT NULL, `name` TEXT NOT NULL, `number` INTEGER NOT NULL, `isCompleted` INTEGER NOT NULL, `completedAt` INTEGER, FOREIGN KEY(`bookId`) REFERENCES `books`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                  )
+                  db.execSQL("CREATE INDEX IF NOT EXISTS `index_chapters_bookId` ON `chapters` (`bookId`)")
+                  SyllabusDatabase.MIGRATION_1_2.migrate(db)
+                  SyllabusDatabase.MIGRATION_2_3.migrate(db)
+                  db.execSQL("INSERT INTO `books` (`id`, `name`, `createdAt`) VALUES (1, 'Chemistry', 1000)")
+                  db.execSQL(
+                    "INSERT INTO `chapters` (`id`, `bookId`, `name`, `number`, `isCompleted`, `completedAt`) VALUES (10, 1, 'Kinetics', 1, 0, NULL)"
+                  )
+                  db.execSQL(
+                    """
+                    INSERT INTO `active_timer_state` (
+                      `id`, `sessionId`, `bookId`, `chapterId`, `mode`, `status`,
+                      `focusDurationMs`, `breakDurationMs`, `goalMs`, `notes`,
+                      `sessionStartWallTimeMs`, `phaseStartElapsedMs`, `phaseStartWallTimeMs`,
+                      `accumulatedFocusMs`, `accumulatedBreakMs`, `accumulatedPauseMs`,
+                      `pauseStartElapsedMs`, `pauseStartWallTimeMs`, `lastKnownWallTimeMs`,
+                      `lapCount`, `goalNotified`, `pomodoroCycle`, `statusBeforeStopSummary`
+                    ) VALUES (
+                      1, 'sess-v3', 1, 10, 'POMODORO', 'RUNNING',
+                      1500000, 300000, NULL, '',
+                      1000, 1000, 1000, 0, 0, 0, NULL, NULL, 2000, 0, 0, 1, NULL
+                    )
+                    """
+                      .trimIndent()
+                  )
+                }
+
+                override fun onUpgrade(
+                  db: androidx.sqlite.db.SupportSQLiteDatabase,
+                  oldVersion: Int,
+                  newVersion: Int,
+                ) = Unit
+              }
+            )
+            .build()
+        )
+      helper.writableDatabase.close()
+      helper.close()
+
+      val migrated =
+        Room.databaseBuilder(context, SyllabusDatabase::class.java, "migration_v3_test.db")
+          .allowMainThreadQueries()
+          .addMigrations(
+            SyllabusDatabase.MIGRATION_1_2,
+            SyllabusDatabase.MIGRATION_2_3,
+            SyllabusDatabase.MIGRATION_3_4,
+          )
+          .build()
+
+      val active = migrated.timerDao().getActiveTimerStateOnce()
+      assertNotNull(active)
+      assertEquals("sess-v3", active!!.sessionId)
+      assertEquals(0L, active.phaseCarryMs)
+      assertNull(active.pausedFromStatus)
 
       migrated.close()
       dbFile.delete()
@@ -1530,6 +1617,422 @@ class TimerRobolectricTest {
     assertNull(coldLaunchRepo.recoveryPrompt.first())
     assertTrue(cancelCount > 0)
   }
+
+  @Test
+  fun `pause freezes stopwatch elapsed for 20s and resume continues seamlessly without resetting`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Physics"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Kinematics", number = 1))
+
+      assertTrue(repo.startSession(bookId = bookId, chapterId = chapterId, mode = TimerMode.STOPWATCH))
+      clock.advance(30_000L) // Run 30s
+      repo.pause()
+
+      val pausedState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.PAUSED, pausedState.status)
+      val atPauseMetrics = TimerMath.computeMetrics(pausedState, clock.elapsedMs, clock.wallMs)
+      assertEquals(30_000L, atPauseMetrics.activeFocusMs)
+      assertEquals(0L, atPauseMetrics.pauseMs)
+
+      // Wait 20s while paused -> active focus MUST stay frozen at 30s!
+      clock.advance(20_000L)
+      val frozenMetrics = TimerMath.computeMetrics(pausedState, clock.elapsedMs, clock.wallMs)
+      assertEquals(30_000L, frozenMetrics.activeFocusMs)
+      assertEquals("00:00:30", TimerMath.formatHms(frozenMetrics.activeFocusMs))
+      assertEquals(20_000L, frozenMetrics.pauseMs)
+
+      // Calling pause() again is idempotent
+      repo.pause()
+      assertEquals(pausedState.pauseStartElapsedMs, db.timerDao().getActiveTimerStateOnce()!!.pauseStartElapsedMs)
+
+      // Resume continues from 30s and tracks 20s pause
+      repo.resume()
+      val resumedState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.RUNNING, resumedState.status)
+      val atResumeMetrics = TimerMath.computeMetrics(resumedState, clock.elapsedMs, clock.wallMs)
+      assertEquals(30_000L, atResumeMetrics.activeFocusMs)
+      assertEquals(20_000L, atResumeMetrics.pauseMs)
+
+      // Study 10s more -> total 40s active focus, 20s pause
+      clock.advance(10_000L)
+      val laterMetrics = TimerMath.computeMetrics(resumedState, clock.elapsedMs, clock.wallMs)
+      assertEquals(40_000L, laterMetrics.activeFocusMs)
+      assertEquals(20_000L, laterMetrics.pauseMs)
+    }
+
+  @Test
+  fun `pause survives process kill and reboot as PAUSED without recovery dialog and restores notification state`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Biology"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Enzymes", number = 4))
+
+      var serviceSyncCount = 0
+      var alarmCancelCount = 0
+      val testRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onSyncService = { serviceSyncCount++ },
+          onSyncAlarm = { state -> if (state == null) alarmCancelCount++ },
+        )
+
+      assertTrue(testRepo.startSession(bookId = bookId, chapterId = chapterId, mode = TimerMode.STOPWATCH))
+      clock.advance(45_000L)
+      testRepo.pause()
+
+      // Verify PAUSED ongoing notification disables chronometer and calls ACTION_TOGGLE_PAUSE_RESUME
+      val pausedState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(45_000L, pausedState.phaseCarryMs)
+      assertEquals(TimerStatus.RUNNING, pausedState.pausedFromStatus)
+      val pausedMetrics = TimerMath.computeMetrics(pausedState, clock.elapsedMs, clock.wallMs)
+      val notif =
+        NotificationHelper.buildOngoingTimerNotification(
+          context = context,
+          state = pausedState,
+          bookName = "Biology",
+          chapterLabel = "Chapter 4: Enzymes",
+          metrics = pausedMetrics,
+          nowWallTimeMs = clock.wallMs,
+        )
+      assertFalse((notif.extras.getBoolean(android.app.Notification.EXTRA_SHOW_CHRONOMETER, false)))
+      assertEquals("Paused • 00:00:45", notif.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+      assertEquals("Resume", notif.actions[0].title.toString())
+      assertEquals(
+        com.example.timer.TimerForegroundService.ACTION_TOGGLE_PAUSE_RESUME,
+        Shadows.shadowOf(notif.actions[0].actionIntent).savedIntent.action,
+      )
+
+      // Same-boot kill & relaunch while PAUSED -> restored PAUSED at 45s with NO recovery dialog
+      clock.advance(60_000L) // killed for 60s while paused
+      serviceSyncCount = 0
+      val relaunchRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onSyncService = { serviceSyncCount++ },
+          onSyncAlarm = { state -> if (state == null) alarmCancelCount++ },
+        )
+      relaunchRepo.checkUnfinishedSessionOnLaunch()
+      assertNull(relaunchRepo.recoveryPrompt.first())
+      assertEquals(1, serviceSyncCount)
+
+      val restoredAfterKill = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.PAUSED, restoredAfterKill.status)
+      assertEquals(45_000L, restoredAfterKill.phaseCarryMs)
+      val metricsAfterKill = TimerMath.computeMetrics(restoredAfterKill, clock.elapsedMs, clock.wallMs)
+      assertEquals(45_000L, metricsAfterKill.activeFocusMs)
+      assertEquals(60_000L, metricsAfterKill.pauseMs)
+
+      // Reboot while PAUSED (elapsedRealtime resets to 5s, wall clock advanced +120s)
+      clock.elapsedMs = 5_000L
+      clock.wallMs += 120_000L
+      val rebootRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+        )
+      rebootRepo.checkUnfinishedSessionOnLaunch()
+      assertNull(rebootRepo.recoveryPrompt.first())
+
+      val rebased = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.PAUSED, rebased.status)
+      assertEquals(45_000L, rebased.phaseCarryMs)
+      val metricsAfterReboot = TimerMath.computeMetrics(rebased, clock.elapsedMs, clock.wallMs)
+      assertEquals(45_000L, metricsAfterReboot.activeFocusMs)
+      assertEquals(180_000L, metricsAfterReboot.pauseMs)
+
+      // Resuming after reboot starts cleanly at 45s
+      rebootRepo.resume()
+      clock.advance(15_000L)
+      assertTrue(rebootRepo.saveCurrentSession("Post-reboot study"))
+      val saved = db.timerDao().getAllSessionsOnce().single()
+      assertEquals(60_000L, saved.activeFocusMs)
+      assertEquals(180_000L, saved.pauseMs)
+    }
+
+  @Test
+  fun `stop and save while paused preserves frozen active focus and full open pause duration`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Literature"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Poetry", number = 2))
+
+      assertTrue(repo.startSession(bookId = bookId, chapterId = chapterId, mode = TimerMode.STOPWATCH))
+      clock.advance(50_000L)
+      repo.pause()
+      clock.advance(25_000L) // open pause 25s
+
+      // Open Stop Summary dialog -> active focus stays 50s, pause captures 25s
+      repo.requestStopSummary()
+      val summaryState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.STOP_SUMMARY, summaryState.status)
+      assertEquals(50_000L, summaryState.phaseCarryMs)
+      assertEquals(0L, summaryState.accumulatedFocusMs)
+      val summaryMetrics = TimerMath.computeMetrics(summaryState, clock.elapsedMs, clock.wallMs)
+      assertEquals(50_000L, summaryMetrics.activeFocusMs)
+      assertEquals(25_000L, summaryMetrics.pauseMs)
+
+      clock.advance(5_000L) // user reads summary for 5s before pressing Save
+      assertTrue(repo.saveCurrentSession("Finished chapter"))
+      val saved = db.timerDao().getAllSessionsOnce().single()
+      assertEquals(50_000L, saved.activeFocusMs)
+      assertEquals(25_000L, saved.pauseMs)
+    }
+
+  @Test
+  fun `pomodoro 25-5 pause 10m+5m freeze and resume +5m keeps exact remaining, progress, and zero double counting`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Chemistry"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Thermodynamics", number = 5))
+
+      val syncedTargets = mutableListOf<List<ScheduledAlarmTarget>>()
+      val pomRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+          onSyncAlarm = { state ->
+            syncedTargets.add(
+              TimerAlarmScheduler.computeScheduledTargets(
+                state = state,
+                nowElapsedMs = clock.elapsedMs,
+                nowWallMs = clock.wallMs,
+              )
+            )
+          },
+        )
+
+      assertTrue(
+        pomRepo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      val sessionId = db.timerDao().getActiveTimerStateOnce()!!.sessionId
+
+      // Test 1: Run 10m of 25m focus -> 15m left (progress = 0.4)
+      clock.advance(10 * 60_000L)
+      pomRepo.pause()
+      assertTrue(syncedTargets.last().isEmpty())
+
+      // Wait 5m while paused: remaining MUST stay frozen at 15:00 (progress 0.4f), phaseCarryMs = 10m, accumulatedFocusMs = 0
+      clock.advance(5 * 60_000L)
+      val pausedFocusState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(10 * 60_000L, pausedFocusState.phaseCarryMs)
+      assertEquals(0L, pausedFocusState.accumulatedFocusMs)
+      assertEquals(TimerStatus.RUNNING, pausedFocusState.pausedFromStatus)
+      val pausedFocusMetrics = TimerMath.computeMetrics(pausedFocusState, clock.elapsedMs, clock.wallMs)
+      assertEquals(10 * 60_000L, pausedFocusMetrics.activeFocusMs)
+      assertEquals(15 * 60_000L, pausedFocusMetrics.currentPhaseRemainingMs)
+      assertEquals("00:15:00", TimerMath.formatHms(pausedFocusMetrics.currentPhaseRemainingMs))
+      assertEquals(0.4f, pausedFocusMetrics.progressFraction, 0.001f)
+      assertEquals(5 * 60_000L, pausedFocusMetrics.pauseMs)
+
+      // Resume -> schedules FOCUS_END at +15m; advance 5m -> remaining 10:00, progress = 0.6f
+      pomRepo.resume()
+      val resumedFocus = syncedTargets.last().single()
+      assertEquals(TimerAlarmEventType.FOCUS_END, resumedFocus.eventType)
+      assertEquals(clock.wallMs + 15 * 60_000L, resumedFocus.triggerWallMs)
+
+      clock.advance(5 * 60_000L)
+      val after5mState = db.timerDao().getActiveTimerStateOnce()!!
+      val after5mMetrics = TimerMath.computeMetrics(after5mState, clock.elapsedMs, clock.wallMs)
+      assertEquals(15 * 60_000L, after5mMetrics.activeFocusMs)
+      assertEquals(10 * 60_000L, after5mMetrics.currentPhaseRemainingMs)
+      assertEquals("00:10:00", TimerMath.formatHms(after5mMetrics.currentPhaseRemainingMs))
+      assertEquals(0.6f, after5mMetrics.progressFraction, 0.001f)
+
+      // Test 2: Advance remaining 10m (total 25m active) -> fire FOCUS_END -> no double counting!
+      clock.advance(10 * 60_000L)
+      val focusEndOutcome =
+        pomRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = resumedFocus.triggerWallMs,
+        )
+      assertNotNull(focusEndOutcome)
+      assertEquals(TimerStatus.BREAK, focusEndOutcome!!.updatedState.status)
+      assertEquals(0L, focusEndOutcome.updatedState.phaseCarryMs)
+      assertEquals(25 * 60_000L, focusEndOutcome.updatedState.accumulatedFocusMs)
+
+      val breakStartMetrics = TimerMath.computeMetrics(focusEndOutcome.updatedState, clock.elapsedMs, clock.wallMs)
+      assertEquals(25 * 60_000L, breakStartMetrics.activeFocusMs)
+      assertEquals(5 * 60_000L, breakStartMetrics.currentPhaseRemainingMs)
+
+      // Test 4: Run 2m of 5m Break, Pause 3m -> break remaining frozen at 3m, progress = 0.4f
+      clock.advance(2 * 60_000L)
+      pomRepo.pause()
+      clock.advance(3 * 60_000L)
+      val pausedBreakState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.PAUSED, pausedBreakState.status)
+      assertEquals(TimerStatus.BREAK, pausedBreakState.pausedFromStatus)
+      assertEquals(2 * 60_000L, pausedBreakState.phaseCarryMs)
+      val pausedBreakMetrics = TimerMath.computeMetrics(pausedBreakState, clock.elapsedMs, clock.wallMs)
+      assertEquals(25 * 60_000L, pausedBreakMetrics.activeFocusMs)
+      assertEquals(2 * 60_000L, pausedBreakMetrics.breakMs)
+      assertEquals(3 * 60_000L, pausedBreakMetrics.currentPhaseRemainingMs)
+      assertEquals(0.4f, pausedBreakMetrics.progressFraction, 0.001f)
+
+      // Resume from paused Break -> restores BREAK status (not RUNNING) with 3m remaining!
+      pomRepo.resume()
+      val resumedBreakState = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.BREAK, resumedBreakState.status)
+      assertEquals(2 * 60_000L, resumedBreakState.phaseCarryMs)
+      val resumedBreakTarget = syncedTargets.last().single()
+      assertEquals(TimerAlarmEventType.BREAK_END, resumedBreakTarget.eventType)
+      assertEquals(clock.wallMs + 3 * 60_000L, resumedBreakTarget.triggerWallMs)
+
+      // Complete remaining 3m break -> total accumulatedBreakMs = 5m, activeFocusMs remains 25m
+      clock.advance(3 * 60_000L)
+      val breakEndOutcome =
+        pomRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
+          eventType = TimerAlarmEventType.BREAK_END,
+          sessionId = sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = resumedBreakTarget.triggerWallMs,
+        )
+      assertNotNull(breakEndOutcome)
+      assertEquals(TimerStatus.RUNNING, breakEndOutcome!!.updatedState.status)
+      assertEquals(5 * 60_000L, breakEndOutcome.updatedState.accumulatedBreakMs)
+      assertEquals(25 * 60_000L, breakEndOutcome.updatedState.accumulatedFocusMs)
+      assertEquals(0L, breakEndOutcome.updatedState.phaseCarryMs)
+
+      assertTrue(pomRepo.saveCurrentSession("Exact Pomodoro cycle"))
+      val saved = db.timerDao().getAllSessionsOnce().single()
+      assertEquals(25 * 60_000L, saved.activeFocusMs)
+      assertEquals(5 * 60_000L, saved.breakMs)
+      assertEquals(8 * 60_000L, saved.pauseMs)
+    }
+
+  @Test
+  fun `rapid 10 pause-resume cycles accumulate exact active focus and pause without drift and notif uses toggle action`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "Math"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Vectors", number = 1))
+
+      assertTrue(
+        repo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      clock.advance(20_000L)
+      val runningState = db.timerDao().getActiveTimerStateOnce()!!
+      val runningMetrics = TimerMath.computeMetrics(runningState, clock.elapsedMs, clock.wallMs)
+      val runningNotif =
+        NotificationHelper.buildOngoingTimerNotification(
+          context = context,
+          state = runningState,
+          bookName = "Math",
+          chapterLabel = "Chapter 1: Vectors",
+          metrics = runningMetrics,
+          nowWallTimeMs = clock.wallMs,
+        )
+      assertTrue(runningNotif.extras.getBoolean(android.app.Notification.EXTRA_SHOW_CHRONOMETER, false))
+      assertEquals("Pause", runningNotif.actions[0].title.toString())
+      assertEquals(
+        com.example.timer.TimerForegroundService.ACTION_TOGGLE_PAUSE_RESUME,
+        Shadows.shadowOf(runningNotif.actions[0].actionIntent).savedIntent.action,
+      )
+
+      // Test 7: Rapidly pause/resume 10 times (20s initial + 10 * 5s active = 70s active, 10 * 3s = 30s pause)
+      repeat(10) {
+        repo.togglePauseResume()
+        clock.advance(3_000L)
+        repo.togglePauseResume()
+        clock.advance(5_000L)
+      }
+
+      val midState = db.timerDao().getActiveTimerStateOnce()!!
+      val midMetrics = TimerMath.computeMetrics(midState, clock.elapsedMs, clock.wallMs)
+      assertEquals(70_000L, midMetrics.activeFocusMs)
+      assertEquals(30_000L, midMetrics.pauseMs)
+      assertEquals(25 * 60_000L - 70_000L, midMetrics.currentPhaseRemainingMs)
+
+      assertTrue(repo.saveCurrentSession("10x rapid pause/resume"))
+      val saved = db.timerDao().getAllSessionsOnce().single()
+      assertEquals(70_000L, saved.activeFocusMs)
+      assertEquals(30_000L, saved.pauseMs)
+    }
+
+  @Test
+  fun `process death recovery of running pomodoro rebases phaseCarryMs without double counting accumulatedFocusMs`() =
+    runTest {
+      val bookId = db.syllabusDao().insertBook(BookEntity(name = "History"))
+      val chapterId =
+        db.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Modern Era", number = 1))
+
+      assertTrue(
+        repo.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      clock.advance(10 * 60_000L)
+      repo.touchLastKnownWallTime()
+
+      // Simulate process death & cold relaunch 2m later
+      clock.advance(2 * 60_000L)
+      val recoveryRepo =
+        TimerRepository(
+          timerDao = db.timerDao(),
+          syllabusDao = db.syllabusDao(),
+          runInTransaction = { block -> db.withTransaction { block() } },
+          clock = clock,
+          zoneId = ZoneId.of("UTC"),
+        )
+      recoveryRepo.checkUnfinishedSessionOnLaunch()
+      val prompt = recoveryRepo.recoveryPrompt.first()
+      assertNotNull(prompt)
+      assertEquals(10 * 60_000L, prompt!!.recoveredMetrics.activeFocusMs)
+      assertEquals(15 * 60_000L, prompt.recoveredMetrics.currentPhaseRemainingMs)
+
+      recoveryRepo.resumeRecoveredSession()
+      val resumed = db.timerDao().getActiveTimerStateOnce()!!
+      assertEquals(TimerStatus.RUNNING, resumed.status)
+      assertEquals(0L, resumed.accumulatedFocusMs)
+      assertEquals(10 * 60_000L, resumed.phaseCarryMs)
+
+      clock.advance(15 * 60_000L)
+      val outcome =
+        recoveryRepo.fireEvent(
+          source = AlarmFireSource.PRIMARY,
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = resumed.sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = clock.wallMs,
+        )
+      assertNotNull(outcome)
+      assertEquals(25 * 60_000L, outcome!!.updatedState.accumulatedFocusMs)
+      assertEquals(0L, outcome.updatedState.phaseCarryMs)
+    }
 }
 
 

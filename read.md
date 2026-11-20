@@ -174,13 +174,13 @@ app/src/main/java/com/example/
         └── TimerViewModel.kt
 ```
 
-### Room DB Schema (`version = 2`, non-destructive `MIGRATION_1_2`)
+### Room DB Schema (`version = 4`, non-destructive `MIGRATION_1_2`, `MIGRATION_2_3`, `MIGRATION_3_4`)
 - **`books` table**: `id: Long` (PK, autoGenerate), `name: String`, `createdAt: Long`
 - **`chapters` table**: `id: Long` (PK, autoGenerate), `bookId: Long` (FK -> `books.id`, `ON DELETE CASCADE`, indexed), `name: String`, `number: Int`, `isCompleted: Boolean`, `completedAt: Long?`
 - **`reading_sessions` table**: `id: Long` (PK), `sessionId: String` (unique index), `bookId: Long` (FK CASCADE, indexed), `chapterId: Long` (FK CASCADE, indexed), `mode` (`STOPWATCH`/`POMODORO`), `status` (`SAVED`), `startWallTimeMs`, `endWallTimeMs`, `activeFocusMs`, `pauseMs`, `breakMs`, `goalMs` (nullable), `notes`, `sessionDate` (`yyyy-MM-dd`, indexed, split across midnight), `createdAt`
 - **`session_events` table**: `id: Long` (PK), `sessionId` (indexed), `bookId` (FK CASCADE, indexed), `chapterId` (FK CASCADE, indexed), `eventType` (`START`/`PAUSE`/`RESUME`/`LAP`/`BREAK_START`/`BREAK_SKIP`/`STOP`), `elapsedAtEventMs`, `wallTimeMs`, `label`
 - **`reading_goals` table**: `id: Long` (PK), `periodType` (`DAILY`/`WEEKLY`/`MONTHLY`, indexed), `targetMinutes`, `isActive`, `createdAt`
-- **`active_timer_state` table**: Single-row crash/reboot state (`id = 1`), `sessionId`, `bookId` (FK CASCADE), `chapterId` (FK CASCADE), `mode`, `status`, `focusDurationMs`, `breakDurationMs`, `goalMs`, `notes`, `sessionStartWallTimeMs`, `phaseStartElapsedMs`, `phaseStartWallTimeMs`, `accumulatedFocusMs`, `accumulatedBreakMs`, `accumulatedPauseMs`, `pauseStartElapsedMs`, `pauseStartWallTimeMs`, `lastKnownWallTimeMs`, `lapCount`, `goalNotified`, `pomodoroCycle`, `statusBeforeStopSummary`
+- **`active_timer_state` table**: Single-row crash/reboot state (`id = 1`), `sessionId`, `bookId` (FK CASCADE), `chapterId` (FK CASCADE), `mode`, `status`, `focusDurationMs`, `breakDurationMs`, `goalMs`, `notes`, `sessionStartWallTimeMs`, `phaseStartElapsedMs`, `phaseStartWallTimeMs`, `accumulatedFocusMs`, `accumulatedBreakMs`, `accumulatedPauseMs`, `pauseStartElapsedMs`, `pauseStartWallTimeMs`, `lastKnownWallTimeMs`, `lapCount`, `goalNotified`, `pomodoroCycle`, `phaseCarryMs` (in-phase carried ms across pauses/recovery), `pausedFromStatus` (`RUNNING`/`BREAK` when paused), `statusBeforeStopSummary`
 
 ---
 
@@ -230,6 +230,7 @@ app/src/main/java/com/example/
 ### Completed Backup & Widget Integration
 - [x] Backup & Import Schema v2 (`reading_sessions`, `session_events`, `reading_goals`, full settings including Pomodoro focus/break durations, streaming `JsonWriter`/`JsonReader`, `schemaVersion = 1..2` compatibility, Replace/Merge ID remapping & deduplication)
 - [x] Widget fast-refresh hook (`WidgetUpdater.updateNow`) after every session save/edit/delete and backup import
+- [x] **Study Timer Pause/Resume Bug Fix (`phaseCarryMs` + `pausedFromStatus`, Room DB v4 `MIGRATION_3_4`)**: Atomic field-level Room `UPDATE` transitions inside `Mutex` (`pause()`/`resume()`/`togglePauseResume()`), `accumulatedFocusMs`/`accumulatedBreakMs` reserved strictly for completed phases, `phaseCarryMs` + `pausedFromStatus` carrying frozen in-phase progress across pauses/stop-summary/recovery without double-counting, `TimerAlarmScheduler` subtracting `phaseCarryMs`, shared `ACTION_TOGGLE_PAUSE_RESUME` notification + in-app button, silent `PAUSED` launch recovery, `SharingStarted.WhileSubscribed(..., Long.MAX_VALUE)` replay preservation, and Robolectric fake-clock + migration tests
 
 ### Known Bugs
 - None identified.
@@ -687,6 +688,95 @@ SOLUTION: PRIMARY + BACKUP (both always scheduled together)
 
 ---
 
-## 16. Resume Prompt
+## 16. Study Timer Pause / Resume Bug Fix
 
-Read this file fully before editing to keep Room schema (`version = 3`, `MIGRATION_1_2` + `MIGRATION_2_3`), Backup Schema v2 (`schemaVersion = 1..2` streaming JSON + Replace/Merge ID remapping), Release CI/R8 config, SQL aggregate/projection DAOs, scoped ViewModel/Compose `StateFlow`s, conflated `WidgetUpdater`, RemoteViews widgets, `TimerMath`, and the Primary + Backup alarm system intact.
+### Bug Fix Request (Verbatim)
+```text
+BUG FIX for the existing "Syllabus Tracker" Android app (Kotlin + Jetpack Compose + Room). Read read.md first. Do NOT change UI design, database schema (unless strictly required), widgets, alarm system, backup, or performance setup. Only fix the Pause bug.
+
+PROBLEM
+When I press Pause in the app (Studying screen), the timer resets (goes back to 00:00:00 or the session is lost) instead of freezing at the current elapsed time. Expected: Pause freezes the displayed time and active duration; Resume continues from the same value.
+
+STEP 1: FIND THE ROOT CAUSE (report it before fixing)
+Trace the full Pause path: UI button -> ViewModel -> TimerRepository -> Service -> Room -> StateFlow -> UI. Check every one of these likely causes and report which are real:
+1. Pause handler overwrites or resets startTime/elapsedStart/totalPause (e.g. sets startTime = now, or clears state, or creates a new TimerState with default values).
+2. Pause sends a new Intent to the Service (startForegroundService / onStartCommand) and onStartCommand re-initializes the session instead of only handling ACTION_PAUSE.
+3. Elapsed formula keeps using "now" while paused. It must use pauseStart as the end point while status = PAUSED: elapsed = (if paused: pauseStartElapsed else now) - start - totalPause.
+4. Room write on Pause uses @Insert(onConflict = REPLACE) on the timer-state row, which deletes and recreates it (and cascades to SessionEvent), or the new row has default/zero values. Use @Update or an UPSERT that keeps all existing fields.
+5. The state Flow (stateIn / WhileSubscribed / distinctUntilChanged / optimistic update from the performance fix) emits an initial/idle/default value after Pause, so the UI shows 0 or "no active session".
+6. The recovery/restore logic runs on Pause or on recomposition/ON_RESUME and treats the paused session as unfinished and resets or discards it.
+7. The ticker coroutine or ViewModel is cancelled and recreated on Pause, resetting the locally held elapsed value. The UI must never hold its own counter; it only derives from stored timestamps.
+8. Cancelling alarms on Pause (primary + backup) also clears or resets the timer state by mistake.
+9. Pomodoro phase logic restarts the phase when status changes to PAUSED.
+10. Notification Pause action works but the in-app Pause uses a different code path. Both must call the SAME single repository function.
+
+STEP 2: REQUIRED FIX
+- One single source of truth: TimerRepository.pause() and resume(), used by the app UI, notification actions and anything else.
+- pause(): in a single guarded operation (Mutex) only if status == RUNNING: record pauseStartElapsed = SystemClock.elapsedRealtime() and pauseStartWall = System.currentTimeMillis(), set status = PAUSED, keep startTime, totalPause, bookId, chapterId, mode, goal, notes, session id, phase info UNCHANGED. Persist with a field-level UPDATE (one write). Cancel alarms. Do not touch anything else.
+- resume(): only if status == PAUSED: totalPause += (now - pauseStartElapsed), clear pauseStart, status = RUNNING, persist, reschedule alarms for the remaining time.
+- Elapsed/active time derivation (shared by UI, service, notification, summary, save):
+  activeMillis = (if PAUSED then pauseStartElapsed else now) - startElapsed - totalPauseMillis
+  While paused this value must be constant, and the displayed HH:MM:SS, ring, Elapsed tile and Focus % must freeze.
+- Service: onStartCommand must handle ACTION_START, ACTION_PAUSE, ACTION_RESUME, ACTION_STOP separately. Only ACTION_START may create a session. A null/redelivered intent must restore from Room, never create a new session or reset. Keep the foreground notification alive while paused (show "Paused", stop the chronometer using setUsesChronometer(false) or show the frozen time), with a Resume action.
+- UI: Studying screen shows status chip "Paused", Pause button becomes Resume. The screen state is derived only from the repository StateFlow (no local counters). The StateFlow must never emit an idle/default state while a session exists in Room.
+- Recovery: a session with status PAUSED is restored as PAUSED with the same frozen elapsed time (no reset, no discard, no dialog needed unless the process died while RUNNING).
+- Rotation, minimizing, screen off, process death while paused: time stays frozen at the same value.
+- Pause/Resume repeated many times: active time = sum of running periods only. Pause time never counts as reading time. Stop/Save while paused saves the frozen active time and the correct pause duration (including the current open pause period).
+- Pomodoro: pausing during Focus or Break freezes that phase's remaining time; resume continues the same phase (no restart, no alarm fired while paused).
+- Add Log.d (inside BuildConfig.DEBUG) lines on pause/resume printing startElapsed, pauseStartElapsed, totalPause, activeMillis.
+
+STEP 3: TESTS (verify in code and report)
+- Run 30 s, Pause for 20 s, Resume: active time continues from 30 s, total pause 20 s.
+- Pause, minimize app, open again: same frozen time, not reset.
+- Pause, kill app from Recent apps, reopen: restored as Paused with same time.
+- Pause from notification and from app both behave identically.
+- Pause, Stop, Save: saved active time equals the frozen time.
+- Pomodoro Pause/Resume: no phase restart, no duplicate alarm.
+- Release build (R8) still works.
+
+AFTER FINISHING
+1. Report the root cause(s) you found and exactly what you changed.
+2. Update read.md: add this prompt verbatim, the final pause/resume state machine (RUNNING <-> PAUSED, formulas), and the checklist (done / pending / known bugs).
+3. Make sure the project compiles with no errors. No extra features, animations or decorations.
+```
+
+### Root Causes Identified & Fixed (5 Confirmed Causes)
+1. **`TimerMath.computeMetrics()` Zeroed `phaseElapsed` When `PAUSED`**:
+   - Previously returned `phaseElapsed = 0L` on `PAUSED`, resetting Pomodoro `currentPhaseRemainingMs` to the full phase duration (e.g., `25:00`) and `progressFraction` to `0f`.
+2. **`TimerRepository.resumeSession()` Reset `phaseStart` Without `phaseCarryMs`**:
+   - Setting `phaseStartElapsedMs = now` and `phaseStartWallTimeMs = now` without preserving prior in-phase duration lost the time already studied in that phase.
+3. **Partial Phase Folded Into `accumulatedFocusMs` Double-Counted Focus (`pauseSession` / `requestStopSummary` + `fireEvent`)**:
+   - Folding partial phase time into `accumulatedFocusMs` caused `fireEvent(FOCUS_END)` (which adds `focusDurationMs`) to double-count completed focus time.
+4. **`TimerAlarmScheduler.computeScheduledTargets()` Ignored `phaseCarryMs`**:
+   - `FOCUS_END`, `BREAK_END`, and `GOAL_REACHED` targets were computed from `phaseStart` only, ignoring carried time already elapsed before pause/recovery.
+5. **`TimerRepository.resumeRecoveredSession()` Overwrote `PAUSED` to `RUNNING` (Plus Unlocked Toggle / `REPLACE` / Replay Cache)**:
+   - Restoring a `PAUSED` session turned it into `RUNNING`; fixed alongside `MIGRATION_3_4` (`phaseCarryMs` + `pausedFromStatus`), `Mutex`-guarded `togglePauseResume()`, field-level `@Query UPDATE` mutations, shared `ACTION_TOGGLE_PAUSE_RESUME` notification action with `setUsesChronometer(false)`, and `WhileSubscribed(..., Long.MAX_VALUE)`.
+
+### Final `phaseCarryMs` + `pausedFromStatus` State Machine & Formulas (Room v4 `MIGRATION_3_4`)
+- **Schema (`ActiveTimerStateEntity`, DB v4 `MIGRATION_3_4`)**:
+  - Added `phaseCarryMs: Long NOT NULL DEFAULT 0` and `pausedFromStatus: String?` (`RUNNING` / `BREAK`).
+  - `accumulatedFocusMs` and `accumulatedBreakMs` track **completed phases only** (updated only on `FOCUS_END`, `BREAK_END`, or `skipBreak()`).
+- **Pause (`RUNNING`/`BREAK -> PAUSED`)**:
+  - Computes `carryMs = TimerMath.computeMetrics(...).currentPhaseElapsedMs` and `pausedPhase = current.status`.
+  - Executes `TimerDao.updatePauseState(...)` setting `status = PAUSED`, `pausedFromStatus = pausedPhase`, `phaseCarryMs = carryMs`, `pauseStartElapsedMs = nowElapsed`, `pauseStartWallTimeMs = nowWall`, `lastKnownWallTimeMs = nowWall` without modifying `accumulatedFocusMs` / `accumulatedBreakMs` / `phaseStart*`. Cancels alarms (`onSyncAlarm(null)`).
+- **Elapsed Math (`TimerMath.computeMetrics` & `computeLastKnownRecoveryMetrics`)**:
+  - `liveDelta = if (RUNNING || BREAK) max(0, nowElapsed - phaseStartElapsedMs) else 0` (wall-clock fallback if monotonic clock reset across reboot).
+  - `phaseElapsed = state.phaseCarryMs + liveDelta` (while `PAUSED` or `STOP_SUMMARY`, `liveDelta = 0` -> `phaseElapsed == state.phaseCarryMs`, frozen!).
+  - `effectivePhaseStatus`: `state.status` (`RUNNING`/`BREAK`), `state.pausedFromStatus ?: RUNNING` (when `PAUSED`), or `state.statusBeforeStopSummary` / `pausedFromStatus` (when `STOP_SUMMARY`).
+  - `activeFocusMs = accumulatedFocusMs + (if effectivePhaseStatus == RUNNING -> phaseElapsed else 0)`
+  - `breakMs = accumulatedBreakMs + (if effectivePhaseStatus == BREAK -> phaseElapsed else 0)`
+  - `pauseMs = accumulatedPauseMs + (if PAUSED -> max(0, nowElapsed - pauseStartElapsedMs) else 0)`
+- **Resume (`PAUSED`/`STOP_SUMMARY -> RUNNING`/`BREAK`)**:
+  - Resolves `targetStatus` from `pausedFromStatus` (`RUNNING` vs `BREAK`).
+  - Adds open pause `extraPause` to `accumulatedPauseMs`, resets `phaseStartElapsedMs = nowElapsed`, `phaseStartWallTimeMs = nowWall`, keeps `phaseCarryMs` unchanged, clears `pausedFromStatus`, `statusBeforeStopSummary`, `pauseStart*` via `TimerDao.updateResumeState(...)`.
+- **Alarm Scheduling (`TimerAlarmScheduler.computeScheduledTargets`)**:
+  - Uses `phaseCarryMs` and `metrics.currentPhaseElapsedMs` / `metrics.activeFocusMs` so `FOCUS_END`, `BREAK_END`, and `GOAL_REACHED` fire after the exact remaining duration.
+- **Phase Completion & Recovery**:
+  - `fireEvent(FOCUS_END)` / `fireEvent(BREAK_END)` / `skipBreak()` add the completed phase duration to `accumulatedFocusMs` / `accumulatedBreakMs` and reset `phaseCarryMs = 0L`, `pausedFromStatus = null`.
+  - `checkUnfinishedSessionOnLaunch()` and `resumeRecoveredSession()` restore `PAUSED` sessions as `PAUSED` with `phaseCarryMs` preserved, and rebase interrupted `RUNNING`/`BREAK` sessions into `phaseCarryMs` without double-counting `accumulatedFocusMs`.
+
+---
+
+## 17. Resume Prompt
+
+Read this file fully before editing to keep Room schema (`version = 4`, `MIGRATION_1_2` + `MIGRATION_2_3` + `MIGRATION_3_4`), Backup Schema v2 (`schemaVersion = 1..2` streaming JSON + Replace/Merge ID remapping), Release CI/R8 config, SQL aggregate/projection DAOs, scoped ViewModel/Compose `StateFlow`s, conflated `WidgetUpdater`, RemoteViews widgets, `TimerMath` (`phaseCarryMs` + `pausedFromStatus` state machine), and the Primary + Backup alarm system intact.

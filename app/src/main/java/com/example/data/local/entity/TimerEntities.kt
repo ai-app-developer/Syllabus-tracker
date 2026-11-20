@@ -148,5 +148,7 @@ data class ActiveTimerStateEntity(
   val lapCount: Int = 0,
   val goalNotified: Boolean = false,
   val pomodoroCycle: Int = 1,
+  val phaseCarryMs: Long = 0L,
+  val pausedFromStatus: String? = null,
   val statusBeforeStopSummary: String? = null,
 )

@@ -158,6 +158,21 @@ object NotificationHelper {
     NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
   }
 
+  fun buildSyncingTimerNotification(context: Context): Notification {
+    ensureNotificationChannel(context)
+    return NotificationCompat.Builder(context, TIMER_ONGOING_CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_notification_book)
+      .setContentTitle(context.getString(R.string.app_name))
+      .setContentText("Syncing study timer...")
+      .setOngoing(true)
+      .setOnlyAlertOnce(true)
+      .setSilent(true)
+      .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+      .setUsesChronometer(false)
+      .setShowWhen(false)
+      .build()
+  }
+
   fun buildOngoingTimerNotification(
     context: Context,
     state: ActiveTimerStateEntity,
@@ -168,20 +183,29 @@ object NotificationHelper {
   ): Notification {
     ensureNotificationChannel(context)
 
-    val effectiveStatus =
-      if (state.status == TimerStatus.STOP_SUMMARY) {
-        state.statusBeforeStopSummary ?: TimerStatus.PAUSED
-      } else {
-        state.status
+    val isPaused =
+      state.status == TimerStatus.PAUSED || state.status == TimerStatus.STOP_SUMMARY
+    val isBreak =
+      when (state.status) {
+        TimerStatus.BREAK -> true
+        TimerStatus.PAUSED -> state.pausedFromStatus == TimerStatus.BREAK
+        TimerStatus.STOP_SUMMARY ->
+          state.statusBeforeStopSummary == TimerStatus.BREAK ||
+            (state.statusBeforeStopSummary == TimerStatus.PAUSED &&
+              state.pausedFromStatus == TimerStatus.BREAK)
+        else -> false
       }
 
-    val isPaused = effectiveStatus == TimerStatus.PAUSED || state.status == TimerStatus.STOP_SUMMARY
-    val isBreak = effectiveStatus == TimerStatus.BREAK
-
     val modeLabel = if (state.mode == TimerMode.POMODORO) "Pomodoro" else "Stopwatch"
+    val frozenClockText =
+      if (state.mode == TimerMode.POMODORO) {
+        TimerMath.formatHms(metrics.currentPhaseRemainingMs)
+      } else {
+        TimerMath.formatHms(metrics.activeFocusMs)
+      }
     val statusText =
       when {
-        isPaused -> "Paused • ${TimerMath.formatHms(metrics.activeFocusMs)}"
+        isPaused -> "Paused • $frozenClockText"
         isBreak -> "Break • Cycle ${state.pomodoroCycle}"
         else -> "Studying • $modeLabel"
       }
@@ -199,15 +223,15 @@ object NotificationHelper {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
 
-    val toggleServiceIntent =
+    val actionIntent =
       Intent(context, TimerForegroundService::class.java).apply {
         action = TimerForegroundService.ACTION_TOGGLE_PAUSE_RESUME
       }
-    val togglePendingIntent =
+    val actionPendingIntent =
       PendingIntent.getService(
         context,
-        202,
-        toggleServiceIntent,
+        if (isPaused) 204 else 202,
+        actionIntent,
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
 
@@ -238,7 +262,7 @@ object NotificationHelper {
         .addAction(
           0,
           if (isPaused) "Resume" else "Pause",
-          togglePendingIntent,
+          actionPendingIntent,
         )
         .addAction(
           0,

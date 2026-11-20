@@ -171,7 +171,7 @@ class TimerViewModel(application: Application) : AndroidViewModel(application) {
       .distinctUntilChanged()
       .stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
+        started = SharingStarted.Eagerly,
         initialValue = false,
       )
 
@@ -228,7 +228,7 @@ class TimerViewModel(application: Application) : AndroidViewModel(application) {
       .flowOn(Dispatchers.Default)
       .stateIn(
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
+        started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5000L, replayExpirationMillis = Long.MAX_VALUE),
         initialValue = LiveStudyingUiState(),
       )
 

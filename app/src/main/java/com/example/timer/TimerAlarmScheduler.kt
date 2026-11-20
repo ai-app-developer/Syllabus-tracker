@@ -70,27 +70,30 @@ object TimerAlarmScheduler {
         state.mode == TimerMode.POMODORO &&
           state.status == TimerStatus.RUNNING &&
           state.focusDurationMs > 0L -> {
+          val remainingFromPhaseStart = (state.focusDurationMs - state.phaseCarryMs).coerceAtLeast(0L)
           targets.add(
             ScheduledAlarmTarget(
               eventType = TimerAlarmEventType.FOCUS_END,
-              triggerWallMs = state.phaseStartWallTimeMs + state.focusDurationMs,
+              triggerWallMs = state.phaseStartWallTimeMs + remainingFromPhaseStart,
             )
           )
         }
         state.mode == TimerMode.POMODORO &&
           state.status == TimerStatus.BREAK &&
           state.breakDurationMs > 0L -> {
+          val remainingFromPhaseStart = (state.breakDurationMs - state.phaseCarryMs).coerceAtLeast(0L)
           targets.add(
             ScheduledAlarmTarget(
               eventType = TimerAlarmEventType.BREAK_END,
-              triggerWallMs = state.phaseStartWallTimeMs + state.breakDurationMs,
+              triggerWallMs = state.phaseStartWallTimeMs + remainingFromPhaseStart,
             )
           )
         }
       }
 
       if (!state.goalNotified && state.status == TimerStatus.RUNNING && state.goalMs != null && state.goalMs > 0L) {
-        val remainingFromPhaseStart = (state.goalMs - state.accumulatedFocusMs).coerceAtLeast(0L)
+        val remainingFromPhaseStart =
+          (state.goalMs - state.accumulatedFocusMs - state.phaseCarryMs).coerceAtLeast(0L)
         targets.add(
           ScheduledAlarmTarget(
             eventType = TimerAlarmEventType.GOAL_REACHED,
@@ -101,18 +104,13 @@ object TimerAlarmScheduler {
       return targets
     }
 
-    val elapsedDelta =
-      if (nowElapsedMs >= state.phaseStartElapsedMs) {
-        (nowElapsedMs - state.phaseStartElapsedMs).coerceAtLeast(0L)
-      } else {
-        (nowWallMs - state.phaseStartWallTimeMs).coerceAtLeast(0L)
-      }
+    val metrics = TimerMath.computeMetrics(state, nowElapsedMs, nowWallMs)
 
     when {
       state.mode == TimerMode.POMODORO &&
         state.status == TimerStatus.RUNNING &&
         state.focusDurationMs > 0L -> {
-        val remainingMs = (state.focusDurationMs - elapsedDelta).coerceAtLeast(0L)
+        val remainingMs = (state.focusDurationMs - metrics.currentPhaseElapsedMs).coerceAtLeast(0L)
         targets.add(
           ScheduledAlarmTarget(
             eventType = TimerAlarmEventType.FOCUS_END,
@@ -123,7 +121,7 @@ object TimerAlarmScheduler {
       state.mode == TimerMode.POMODORO &&
         state.status == TimerStatus.BREAK &&
         state.breakDurationMs > 0L -> {
-        val remainingMs = (state.breakDurationMs - elapsedDelta).coerceAtLeast(0L)
+        val remainingMs = (state.breakDurationMs - metrics.currentPhaseElapsedMs).coerceAtLeast(0L)
         targets.add(
           ScheduledAlarmTarget(
             eventType = TimerAlarmEventType.BREAK_END,
@@ -134,8 +132,7 @@ object TimerAlarmScheduler {
     }
 
     if (!state.goalNotified && state.status == TimerStatus.RUNNING && state.goalMs != null && state.goalMs > 0L) {
-      val currentFocusMs = state.accumulatedFocusMs + elapsedDelta
-      val remainingGoalMs = (state.goalMs - currentFocusMs).coerceAtLeast(0L)
+      val remainingGoalMs = (state.goalMs - metrics.activeFocusMs).coerceAtLeast(0L)
       targets.add(
         ScheduledAlarmTarget(
           eventType = TimerAlarmEventType.GOAL_REACHED,
