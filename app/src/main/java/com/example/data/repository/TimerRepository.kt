@@ -30,6 +30,7 @@ import java.time.ZoneId
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +42,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 @Immutable
 data class AlarmOutcome(
@@ -665,153 +667,204 @@ class TimerRepository(
     sessionId: String,
     phaseIndex: Int,
     expectedEventWallMs: Long,
+    onBeforeCommitAttempt: (suspend (delayMs: Long, title: String, message: String, notificationId: Int) -> Unit)? = null,
   ): AlarmOutcome? {
     val eventKey = buildEventKey(sessionId, phaseIndex, eventType)
-    return mutex.withLock {
-      val current = timerDao.getActiveTimerStateOnce()
-      if (current == null || current.sessionId != sessionId) {
-        if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-        return@withLock null
-      }
-      if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) {
-        if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-        onSyncAlarm(null)
-        return@withLock null
-      }
+    return withContext(NonCancellable) {
+      mutex.withLock {
+        val current = timerDao.getActiveTimerStateOnce()
+        if (current == null || current.sessionId != sessionId) {
+          Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+          return@withLock null
+        }
+        if (current.status != TimerStatus.RUNNING && current.status != TimerStatus.BREAK) {
+          Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+          onSyncAlarm(null)
+          return@withLock null
+        }
 
-      val nowElapsed = clock.elapsedRealtime()
-      val nowWall = clock.currentTimeMillis()
+        val nowElapsed = clock.elapsedRealtime()
+        val nowWall = clock.currentTimeMillis()
 
-      if (source == AlarmFireSource.BACKUP && nowWall < expectedEventWallMs - EARLY_TOLERANCE_MS) {
-        onSyncAlarm(current)
-        return@withLock null
-      }
+        if (source == AlarmFireSource.BACKUP && nowWall < expectedEventWallMs - EARLY_TOLERANCE_MS) {
+          onSyncAlarm(current)
+          return@withLock null
+        }
 
-      val delayMs = (nowWall - expectedEventWallMs).coerceAtLeast(0L)
+        val delayMs = (nowWall - expectedEventWallMs).coerceAtLeast(0L)
 
-      when (eventType) {
-        TimerAlarmEventType.FOCUS_END -> {
-          if (
-            current.mode != TimerMode.POMODORO ||
-              current.status != TimerStatus.RUNNING ||
-              current.pomodoroCycle != phaseIndex ||
-              current.focusDurationMs <= 0L
-          ) {
-            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-            return@withLock null
-          }
-          if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
-            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-            return@withLock null
-          }
+        when (eventType) {
+          TimerAlarmEventType.FOCUS_END -> {
+            if (
+              current.mode != TimerMode.POMODORO ||
+                current.status != TimerStatus.RUNNING ||
+                current.pomodoroCycle != phaseIndex ||
+                current.focusDurationMs <= 0L
+            ) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
+            if (alarmDeduplicator.isMarked(eventKey, current.sessionId)) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
 
-          val newAccumulatedFocus = current.accumulatedFocusMs + current.focusDurationMs
-          val updated =
-            current.copy(
-              status = TimerStatus.BREAK,
-              phaseStartElapsedMs = nowElapsed,
-              phaseStartWallTimeMs = nowWall,
-              accumulatedFocusMs = newAccumulatedFocus,
-              lastKnownWallTimeMs = nowWall,
-              phaseCarryMs = 0L,
-              pausedFromStatus = null,
-              statusBeforeStopSummary = null,
-            )
+            val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
+            val breakMins = (current.breakDurationMs / 60_000L).coerceAtLeast(1L)
+            val title = "Break started"
+            val message = "$bookName • Time for a $breakMins min break."
+            val notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID
 
-          runInTransaction {
-            timerDao.upsertActiveTimerState(updated)
-            timerDao.insertEvent(
-              SessionEventEntity(
-                sessionId = current.sessionId,
-                bookId = current.bookId,
-                chapterId = current.chapterId,
-                eventType = SessionEventType.BREAK_START,
-                elapsedAtEventMs = newAccumulatedFocus,
-                wallTimeMs = nowWall,
-                label = "Break",
+            try {
+              onBeforeCommitAttempt?.invoke(delayMs, title, message, notificationId)
+            } catch (err: Throwable) {
+              alarmDeduplicator.clearEvent(eventKey, current.sessionId)
+              throw err
+            }
+
+            if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
+
+            val newAccumulatedFocus = current.accumulatedFocusMs + current.focusDurationMs
+            val updated =
+              current.copy(
+                status = TimerStatus.BREAK,
+                phaseStartElapsedMs = nowElapsed,
+                phaseStartWallTimeMs = nowWall,
+                accumulatedFocusMs = newAccumulatedFocus,
+                lastKnownWallTimeMs = nowWall,
+                phaseCarryMs = 0L,
+                pausedFromStatus = null,
+                statusBeforeStopSummary = null,
               )
+
+            runInTransaction {
+              timerDao.upsertActiveTimerState(updated)
+              timerDao.insertEvent(
+                SessionEventEntity(
+                  sessionId = current.sessionId,
+                  bookId = current.bookId,
+                  chapterId = current.chapterId,
+                  eventType = SessionEventType.BREAK_START,
+                  elapsedAtEventMs = newAccumulatedFocus,
+                  wallTimeMs = nowWall,
+                  label = "Break",
+                )
+              )
+            }
+
+            onSyncAlarm(updated)
+            AlarmOutcome(
+              eventType = eventType,
+              delayMs = delayMs,
+              title = title,
+              message = message,
+              notificationId = notificationId,
+              updatedState = updated,
             )
           }
 
-          onSyncAlarm(updated)
-          val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-          val breakMins = (current.breakDurationMs / 60_000L).coerceAtLeast(1L)
-          AlarmOutcome(
-            eventType = eventType,
-            delayMs = delayMs,
-            title = "Break started",
-            message = "$bookName • Time for a $breakMins min break.",
-            notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID,
-            updatedState = updated,
-          )
-        }
+          TimerAlarmEventType.BREAK_END -> {
+            if (
+              current.mode != TimerMode.POMODORO ||
+                current.status != TimerStatus.BREAK ||
+                current.pomodoroCycle != phaseIndex ||
+                current.breakDurationMs <= 0L
+            ) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
+            if (alarmDeduplicator.isMarked(eventKey, current.sessionId)) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
 
-        TimerAlarmEventType.BREAK_END -> {
-          if (
-            current.mode != TimerMode.POMODORO ||
-              current.status != TimerStatus.BREAK ||
-              current.pomodoroCycle != phaseIndex ||
-              current.breakDurationMs <= 0L
-          ) {
-            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-            return@withLock null
-          }
-          if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
-            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-            return@withLock null
-          }
+            val nextCycle = current.pomodoroCycle + 1
+            val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
+            val title = "Break over, back to focus"
+            val message = "$bookName • Cycle $nextCycle focus started."
+            val notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID
 
-          val newAccumulatedBreak = current.accumulatedBreakMs + current.breakDurationMs
-          val nextCycle = current.pomodoroCycle + 1
-          val updated =
-            current.copy(
-              status = TimerStatus.RUNNING,
-              phaseStartElapsedMs = nowElapsed,
-              phaseStartWallTimeMs = nowWall,
-              accumulatedBreakMs = newAccumulatedBreak,
-              lastKnownWallTimeMs = nowWall,
-              pomodoroCycle = nextCycle,
-              phaseCarryMs = 0L,
-              pausedFromStatus = null,
-              statusBeforeStopSummary = null,
+            try {
+              onBeforeCommitAttempt?.invoke(delayMs, title, message, notificationId)
+            } catch (err: Throwable) {
+              alarmDeduplicator.clearEvent(eventKey, current.sessionId)
+              throw err
+            }
+
+            if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
+
+            val newAccumulatedBreak = current.accumulatedBreakMs + current.breakDurationMs
+            val updated =
+              current.copy(
+                status = TimerStatus.RUNNING,
+                phaseStartElapsedMs = nowElapsed,
+                phaseStartWallTimeMs = nowWall,
+                accumulatedBreakMs = newAccumulatedBreak,
+                lastKnownWallTimeMs = nowWall,
+                pomodoroCycle = nextCycle,
+                phaseCarryMs = 0L,
+                pausedFromStatus = null,
+                statusBeforeStopSummary = null,
+              )
+
+            timerDao.upsertActiveTimerState(updated)
+            onSyncAlarm(updated)
+            AlarmOutcome(
+              eventType = eventType,
+              delayMs = delayMs,
+              title = title,
+              message = message,
+              notificationId = notificationId,
+              updatedState = updated,
             )
-
-          timerDao.upsertActiveTimerState(updated)
-          onSyncAlarm(updated)
-          val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-          AlarmOutcome(
-            eventType = eventType,
-            delayMs = delayMs,
-            title = "Break over, back to focus",
-            message = "$bookName • Cycle $nextCycle focus started.",
-            notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID,
-            updatedState = updated,
-          )
-        }
-
-        TimerAlarmEventType.GOAL_REACHED -> {
-          val goalMs = current.goalMs
-          if (goalMs == null || current.goalNotified || current.status != TimerStatus.RUNNING) {
-            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-            return@withLock null
-          }
-          if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
-            if (BuildConfig.DEBUG) Log.d(ALARM_TAG, "skipped duplicate $eventKey")
-            return@withLock null
           }
 
-          val updated = current.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
-          timerDao.upsertActiveTimerState(updated)
-          onSyncAlarm(updated)
-          val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
-          AlarmOutcome(
-            eventType = eventType,
-            delayMs = delayMs,
-            title = "Goal completed",
-            message = "$bookName • You reached your ${TimerMath.formatGoalWords(goalMs)} study goal.",
-            notificationId = NotificationHelper.TIMER_ALERT_GOAL_NOTIFICATION_ID,
-            updatedState = updated,
-          )
+          TimerAlarmEventType.GOAL_REACHED -> {
+            val goalMs = current.goalMs
+            if (goalMs == null || current.goalNotified || current.status != TimerStatus.RUNNING) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
+            if (alarmDeduplicator.isMarked(eventKey, current.sessionId)) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
+
+            val bookName = syllabusDao.getBookByIdOnce(current.bookId)?.name ?: "Study Session"
+            val title = "Goal completed"
+            val message = "$bookName • You reached your ${TimerMath.formatGoalWords(goalMs)} study goal."
+            val notificationId = NotificationHelper.TIMER_ALERT_GOAL_NOTIFICATION_ID
+
+            try {
+              onBeforeCommitAttempt?.invoke(delayMs, title, message, notificationId)
+            } catch (err: Throwable) {
+              alarmDeduplicator.clearEvent(eventKey, current.sessionId)
+              throw err
+            }
+
+            if (!alarmDeduplicator.tryAcquire(eventKey, current.sessionId)) {
+              Log.i(ALARM_TAG, "skipped duplicate $eventKey (${source.logLabel})")
+              return@withLock null
+            }
+
+            val updated = current.copy(goalNotified = true, lastKnownWallTimeMs = nowWall)
+            timerDao.upsertActiveTimerState(updated)
+            onSyncAlarm(updated)
+            AlarmOutcome(
+              eventType = eventType,
+              delayMs = delayMs,
+              title = title,
+              message = message,
+              notificationId = notificationId,
+              updatedState = updated,
+            )
+          }
         }
       }
     }

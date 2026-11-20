@@ -52,6 +52,9 @@ class UserPreferencesRepository(private val context: Context) {
     val POMODORO_BREAK_MINUTES = intPreferencesKey("pomodoro_break_minutes")
   }
 
+  private val syncPrefs =
+    context.applicationContext.getSharedPreferences(SYNC_PREFS_NAME, Context.MODE_PRIVATE)
+
   @Volatile
   private var cachedPrefs: UserPreferences? = null
 
@@ -77,28 +80,46 @@ class UserPreferencesRepository(private val context: Context) {
               .coerceIn(1, 60),
         )
       }
-      .onEach { cachedPrefs = it }
+      .onEach { loaded ->
+        cachedPrefs = loaded
+        persistSyncMirror(loaded)
+      }
 
-  fun getCachedPreferencesSnapshot(): UserPreferences = cachedPrefs ?: UserPreferences()
+  fun getCachedPreferencesSnapshot(): UserPreferences {
+    cachedPrefs?.let { return it }
+    val loaded = readFromSyncMirror()
+    cachedPrefs = loaded
+    return loaded
+  }
 
   suspend fun getCurrentPreferences(): UserPreferences =
-    cachedPrefs ?: userPreferences.first().also { cachedPrefs = it }
+    cachedPrefs ?: userPreferences.first().also {
+      cachedPrefs = it
+      persistSyncMirror(it)
+    }
 
   suspend fun setDailyGoal(goal: Int) {
     val clamped = goal.coerceIn(1, 50)
-    cachedPrefs = cachedPrefs?.copy(dailyGoal = clamped)
+    val base = getCachedPreferencesSnapshot()
+    val updated = base.copy(dailyGoal = clamped)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs -> prefs[Keys.DAILY_GOAL] = clamped }
   }
 
   suspend fun setReminderEnabled(enabled: Boolean) {
-    cachedPrefs = cachedPrefs?.copy(reminderEnabled = enabled)
+    val updated = getCachedPreferencesSnapshot().copy(reminderEnabled = enabled)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs -> prefs[Keys.REMINDER_ENABLED] = enabled }
   }
 
   suspend fun setReminderTime(hour: Int, minute: Int) {
     val h = hour.coerceIn(0, 23)
     val m = minute.coerceIn(0, 59)
-    cachedPrefs = cachedPrefs?.copy(reminderHour = h, reminderMinute = m)
+    val updated = getCachedPreferencesSnapshot().copy(reminderHour = h, reminderMinute = m)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs ->
       prefs[Keys.REMINDER_HOUR] = h
       prefs[Keys.REMINDER_MINUTE] = m
@@ -106,30 +127,40 @@ class UserPreferencesRepository(private val context: Context) {
   }
 
   suspend fun setLastOpenedBookId(bookId: Long) {
-    cachedPrefs = cachedPrefs?.copy(lastOpenedBookId = bookId)
+    val updated = getCachedPreferencesSnapshot().copy(lastOpenedBookId = bookId)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs -> prefs[Keys.LAST_OPENED_BOOK_ID] = bookId }
   }
 
   suspend fun setTimerAlarmEnabled(enabled: Boolean) {
-    cachedPrefs = cachedPrefs?.copy(timerAlarmEnabled = enabled)
+    val updated = getCachedPreferencesSnapshot().copy(timerAlarmEnabled = enabled)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs -> prefs[Keys.TIMER_ALARM_ENABLED] = enabled }
   }
 
   suspend fun setTimerVibrationEnabled(enabled: Boolean) {
-    cachedPrefs = cachedPrefs?.copy(timerVibrationEnabled = enabled)
+    val updated = getCachedPreferencesSnapshot().copy(timerVibrationEnabled = enabled)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs -> prefs[Keys.TIMER_VIBRATION_ENABLED] = enabled }
   }
 
   suspend fun setTimerPermissionChecklistShown(shown: Boolean) {
-    cachedPrefs = cachedPrefs?.copy(timerPermissionChecklistShown = shown)
+    val updated = getCachedPreferencesSnapshot().copy(timerPermissionChecklistShown = shown)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs -> prefs[Keys.TIMER_PERMISSION_CHECKLIST_SHOWN] = shown }
   }
 
   suspend fun setPomodoroDurations(focusMinutes: Int, breakMinutes: Int) {
     val focus = focusMinutes.coerceIn(1, 180)
     val brk = breakMinutes.coerceIn(1, 60)
-    cachedPrefs =
-      cachedPrefs?.copy(pomodoroFocusMinutes = focus, pomodoroBreakMinutes = brk)
+    val updated =
+      getCachedPreferencesSnapshot().copy(pomodoroFocusMinutes = focus, pomodoroBreakMinutes = brk)
+    cachedPrefs = updated
+    persistSyncMirror(updated)
     context.dataStore.edit { prefs ->
       prefs[Keys.POMODORO_FOCUS_MINUTES] = focus
       prefs[Keys.POMODORO_BREAK_MINUTES] = brk
@@ -146,6 +177,7 @@ class UserPreferencesRepository(private val context: Context) {
         pomodoroBreakMinutes = target.pomodoroBreakMinutes.coerceIn(1, 60),
       )
     cachedPrefs = sanitized
+    persistSyncMirror(sanitized)
     context.dataStore.edit { prefs ->
       prefs[Keys.DAILY_GOAL] = sanitized.dailyGoal
       prefs[Keys.REMINDER_ENABLED] = sanitized.reminderEnabled
@@ -159,5 +191,49 @@ class UserPreferencesRepository(private val context: Context) {
       prefs[Keys.POMODORO_BREAK_MINUTES] = sanitized.pomodoroBreakMinutes
     }
     return sanitized
+  }
+
+  private fun readFromSyncMirror(): UserPreferences {
+    return UserPreferences(
+      dailyGoal = syncPrefs.getInt(SYNC_DAILY_GOAL, UserPreferences.DEFAULT_DAILY_GOAL).coerceIn(1, 50),
+      reminderEnabled = syncPrefs.getBoolean(SYNC_REMINDER_ENABLED, true),
+      reminderHour = syncPrefs.getInt(SYNC_REMINDER_HOUR, UserPreferences.DEFAULT_REMINDER_HOUR).coerceIn(0, 23),
+      reminderMinute = syncPrefs.getInt(SYNC_REMINDER_MINUTE, UserPreferences.DEFAULT_REMINDER_MINUTE).coerceIn(0, 59),
+      lastOpenedBookId = syncPrefs.getLong(SYNC_LAST_OPENED_BOOK_ID, -1L),
+      timerAlarmEnabled = syncPrefs.getBoolean(SYNC_TIMER_ALARM_ENABLED, true),
+      timerVibrationEnabled = syncPrefs.getBoolean(SYNC_TIMER_VIBRATION_ENABLED, true),
+      timerPermissionChecklistShown = syncPrefs.getBoolean(SYNC_CHECKLIST_SHOWN, false),
+      pomodoroFocusMinutes = syncPrefs.getInt(SYNC_POMO_FOCUS, UserPreferences.DEFAULT_POMODORO_FOCUS_MINUTES).coerceIn(1, 180),
+      pomodoroBreakMinutes = syncPrefs.getInt(SYNC_POMO_BREAK, UserPreferences.DEFAULT_POMODORO_BREAK_MINUTES).coerceIn(1, 60),
+    )
+  }
+
+  private fun persistSyncMirror(prefs: UserPreferences) {
+    syncPrefs.edit()
+      .putInt(SYNC_DAILY_GOAL, prefs.dailyGoal)
+      .putBoolean(SYNC_REMINDER_ENABLED, prefs.reminderEnabled)
+      .putInt(SYNC_REMINDER_HOUR, prefs.reminderHour)
+      .putInt(SYNC_REMINDER_MINUTE, prefs.reminderMinute)
+      .putLong(SYNC_LAST_OPENED_BOOK_ID, prefs.lastOpenedBookId)
+      .putBoolean(SYNC_TIMER_ALARM_ENABLED, prefs.timerAlarmEnabled)
+      .putBoolean(SYNC_TIMER_VIBRATION_ENABLED, prefs.timerVibrationEnabled)
+      .putBoolean(SYNC_CHECKLIST_SHOWN, prefs.timerPermissionChecklistShown)
+      .putInt(SYNC_POMO_FOCUS, prefs.pomodoroFocusMinutes)
+      .putInt(SYNC_POMO_BREAK, prefs.pomodoroBreakMinutes)
+      .apply()
+  }
+
+  companion object {
+    private const val SYNC_PREFS_NAME = "timer_prefs_sync"
+    private const val SYNC_DAILY_GOAL = "daily_goal"
+    private const val SYNC_REMINDER_ENABLED = "reminder_enabled"
+    private const val SYNC_REMINDER_HOUR = "reminder_hour"
+    private const val SYNC_REMINDER_MINUTE = "reminder_minute"
+    private const val SYNC_LAST_OPENED_BOOK_ID = "last_opened_book_id"
+    private const val SYNC_TIMER_ALARM_ENABLED = "timer_alarm_enabled"
+    private const val SYNC_TIMER_VIBRATION_ENABLED = "timer_vibration_enabled"
+    private const val SYNC_CHECKLIST_SHOWN = "timer_permission_checklist_shown"
+    private const val SYNC_POMO_FOCUS = "pomodoro_focus_minutes"
+    private const val SYNC_POMO_BREAK = "pomodoro_break_minutes"
   }
 }

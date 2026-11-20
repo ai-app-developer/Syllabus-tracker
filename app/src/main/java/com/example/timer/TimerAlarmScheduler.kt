@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
-import com.example.BuildConfig
 import com.example.MainActivity
 import com.example.SyllabusApplication
 import com.example.data.local.entity.ActiveTimerStateEntity
@@ -16,6 +15,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class TimerAlarmEventType(val requestCode: Int, val action: String) {
@@ -33,14 +34,21 @@ object TimerAlarmScheduler {
   private const val TAG = "TimerAlarm"
   const val BACKUP_OFFSET_MS = 2_000L
   const val LATE_THRESHOLD_MS = 15_000L
+  const val TEST_ALARM_DELAY_MS = 10_000L
+  const val TEST_ALARM_REQUEST_CODE = 3104
+  const val ACTION_TEST_ALARM = "com.example.timer.ACTION_TEST_ALARM"
 
   const val EXTRA_EVENT_TYPE = "extra_alarm_event_type"
   const val EXTRA_SESSION_ID = "extra_alarm_session_id"
   const val EXTRA_POMODORO_CYCLE = "extra_alarm_pomodoro_cycle"
   const val EXTRA_TRIGGER_WALL_MS = "extra_alarm_trigger_wall_ms"
+  const val EXTRA_TEST_ID = "extra_test_alarm_id"
 
   private val logTimeFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+
+  @Volatile
+  private var pendingTestPrimaryJob: Job? = null
 
   fun canScheduleExactAlarms(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
@@ -201,20 +209,74 @@ object TimerAlarmScheduler {
             pi,
           )
         }
-        if (BuildConfig.DEBUG) {
-          val formattedTime =
-            Instant.ofEpochMilli(target.triggerWallMs)
-              .atZone(ZoneId.systemDefault())
-              .format(logTimeFormatter)
-          Log.d(
-            TAG,
-            "scheduled primary+backup ${target.eventType.name} at $formattedTime (backup +2000ms at $backupTriggerWallMs)",
-          )
-        }
+        val formattedTime =
+          Instant.ofEpochMilli(target.triggerWallMs)
+            .atZone(ZoneId.systemDefault())
+            .format(logTimeFormatter)
+        Log.i(
+          TAG,
+          "scheduled primary+backup ${target.eventType.name} at $formattedTime (backup +2000ms at $backupTriggerWallMs, exact=$exactAllowed)",
+        )
       }.onFailure { err ->
         Log.w(TAG, "Failed scheduling ${target.eventType.name}", err)
       }
     }
+  }
+
+  /**
+   * Schedules a synthetic, session-less 10-second test alarm using BOTH:
+   *  - Primary path: coroutine wait on applicationScope (fires at +10s)
+   *  - Backup path: AlarmManager.setAlarmClock / setAndAllowWhileIdle (fires at +10s +2s backup)
+   * so screen-locked end-to-end delivery can be verified cleanly without altering active_timer_state.
+   */
+  fun scheduleTestAlarmIn10Seconds(context: Context): String {
+    val appContext = context.applicationContext
+    val triggerWallMs = System.currentTimeMillis() + TEST_ALARM_DELAY_MS
+    val backupTriggerWallMs = triggerWallMs + BACKUP_OFFSET_MS
+    val testId = "test_${triggerWallMs}"
+
+    val alarmManager = appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+    val exactAllowed = canScheduleExactAlarms(appContext)
+    val pi = buildTestAlarmPendingIntent(appContext, testId, triggerWallMs)
+
+    if (alarmManager != null) {
+      runCatching { alarmManager.cancel(pi) }
+      runCatching {
+        if (exactAllowed) {
+          alarmManager.setAlarmClock(
+            AlarmManager.AlarmClockInfo(backupTriggerWallMs, buildShowStudyingIntent(appContext)),
+            pi,
+          )
+        } else {
+          alarmManager.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            backupTriggerWallMs,
+            pi,
+          )
+        }
+        Log.i(
+          TAG,
+          "scheduled test-in-10s primary+backup testId=$testId exact=$exactAllowed trigger=$triggerWallMs backup=$backupTriggerWallMs",
+        )
+      }.onFailure { err ->
+        Log.w(TAG, "Failed scheduling 10s test backup alarm", err)
+      }
+    }
+
+    val app = appContext as? SyllabusApplication
+    pendingTestPrimaryJob?.cancel()
+    pendingTestPrimaryJob =
+      app?.applicationScope?.launch {
+        delay(TEST_ALARM_DELAY_MS)
+        TimerAlarmPlayer.fireTestAlarm(
+          context = app,
+          source = AlarmFireSource.PRIMARY,
+          testId = testId,
+          expectedEventWallMs = triggerWallMs,
+        )
+      }
+
+    return testId
   }
 
   fun cancelAllAlarms(context: Context) {
@@ -269,6 +331,25 @@ object TimerAlarmScheduler {
     )
   }
 
+  private fun buildTestAlarmPendingIntent(
+    context: Context,
+    testId: String,
+    triggerWallMs: Long,
+  ): PendingIntent {
+    val intent =
+      Intent(context, TimerAlarmReceiver::class.java).apply {
+        action = ACTION_TEST_ALARM
+        putExtra(EXTRA_TEST_ID, testId)
+        putExtra(EXTRA_TRIGGER_WALL_MS, triggerWallMs)
+      }
+    return PendingIntent.getBroadcast(
+      context,
+      TEST_ALARM_REQUEST_CODE,
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+  }
+
   private fun buildShowStudyingIntent(context: Context): PendingIntent {
     val intent =
       Intent(context, MainActivity::class.java).apply {
@@ -286,6 +367,29 @@ object TimerAlarmScheduler {
 
 class TimerAlarmReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    val app = context.applicationContext as? SyllabusApplication ?: return
+
+    if (intent.action == TimerAlarmScheduler.ACTION_TEST_ALARM) {
+      val testId = intent.getStringExtra(TimerAlarmScheduler.EXTRA_TEST_ID).orEmpty()
+      if (testId.isBlank()) return
+      val expectedTriggerWallMs =
+        intent.getLongExtra(TimerAlarmScheduler.EXTRA_TRIGGER_WALL_MS, System.currentTimeMillis())
+      val pendingResult: PendingResult? = goAsync()
+      app.applicationScope.launch {
+        try {
+          TimerAlarmPlayer.fireTestAlarm(
+            context = app,
+            source = AlarmFireSource.BACKUP,
+            testId = testId,
+            expectedEventWallMs = expectedTriggerWallMs,
+          )
+        } finally {
+          pendingResult?.finish()
+        }
+      }
+      return
+    }
+
     val eventTypeName = intent.getStringExtra(TimerAlarmScheduler.EXTRA_EVENT_TYPE) ?: return
     val eventType = runCatching { TimerAlarmEventType.valueOf(eventTypeName) }.getOrNull() ?: return
     val sessionId = intent.getStringExtra(TimerAlarmScheduler.EXTRA_SESSION_ID).orEmpty()
@@ -294,7 +398,6 @@ class TimerAlarmReceiver : BroadcastReceiver() {
     val expectedTriggerWallMs =
       intent.getLongExtra(TimerAlarmScheduler.EXTRA_TRIGGER_WALL_MS, System.currentTimeMillis())
 
-    val app = context.applicationContext as? SyllabusApplication ?: return
     val pendingResult: PendingResult? = goAsync()
     app.applicationScope.launch {
       try {

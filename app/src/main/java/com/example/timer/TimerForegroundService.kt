@@ -13,6 +13,7 @@ import com.example.notifications.NotificationHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Runs the PRIMARY exact-time in-service timer alarm and keeps the ongoing timer chronometer
@@ -30,6 +32,8 @@ class TimerForegroundService : Service() {
   private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private var stateObserverJob: Job? = null
   private var boundaryJob: Job? = null
+  @Volatile
+  private var activeFiringJob: Job? = null
   private var heartbeatJob: Job? = null
 
   private var isForegroundStarted = false
@@ -174,7 +178,10 @@ class TimerForegroundService : Service() {
   }
 
   private fun schedulePrimaryBoundaryAlarm(state: com.example.data.local.entity.ActiveTimerStateEntity) {
-    boundaryJob?.cancel()
+    val existingJob = boundaryJob
+    if (existingJob != null && existingJob !== activeFiringJob) {
+      existingJob.cancel()
+    }
     if (state.status != TimerStatus.RUNNING && state.status != TimerStatus.BREAK) {
       return
     }
@@ -199,6 +206,7 @@ class TimerForegroundService : Service() {
       )
     val initialWaitMs = (nextTarget.triggerWallMs - nowWall).coerceAtLeast(0L)
     val targetElapsedMs = nowElapsed + initialWaitMs
+    val app = applicationContext as? SyllabusApplication ?: return
 
     boundaryJob =
       serviceScope.launch {
@@ -208,14 +216,28 @@ class TimerForegroundService : Service() {
           delay(remainingMs)
         }
         if (!isActive) return@launch
-        TimerAlarmPlayer.fireEvent(
-          context = this@TimerForegroundService,
-          source = AlarmFireSource.PRIMARY,
-          eventType = nextTarget.eventType,
-          sessionId = state.sessionId,
-          phaseIndex = state.pomodoroCycle,
-          expectedEventWallMs = nextTarget.triggerWallMs,
-        )
+        val selfJob = coroutineContext[Job]
+        activeFiringJob = selfJob
+        try {
+          withContext(NonCancellable) {
+            val fireJob =
+              app.applicationScope.launch {
+                TimerAlarmPlayer.fireEvent(
+                  context = app,
+                  source = AlarmFireSource.PRIMARY,
+                  eventType = nextTarget.eventType,
+                  sessionId = state.sessionId,
+                  phaseIndex = state.pomodoroCycle,
+                  expectedEventWallMs = nextTarget.triggerWallMs,
+                )
+              }
+            fireJob.join()
+          }
+        } finally {
+          if (activeFiringJob === selfJob) {
+            activeFiringJob = null
+          }
+        }
       }
   }
 

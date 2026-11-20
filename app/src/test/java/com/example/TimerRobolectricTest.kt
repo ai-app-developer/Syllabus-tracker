@@ -27,6 +27,8 @@ import com.example.data.repository.StudyTrendPeriod
 import com.example.data.repository.SyllabusRepository
 import com.example.data.repository.TimerRepository
 import com.example.notifications.NotificationHelper
+import com.example.timer.AlarmAudioBackend
+import com.example.timer.AlarmDiagnosticLog
 import com.example.timer.AlarmFireSource
 import com.example.timer.AnalyticsPeriod
 import com.example.timer.ClockProvider
@@ -34,6 +36,7 @@ import com.example.timer.GoalPeriodType
 import com.example.timer.PrefsAlarmDeduplicator
 import com.example.timer.ScheduledAlarmTarget
 import com.example.timer.SessionEventType
+import com.example.timer.SoundAttemptResult
 import com.example.timer.TimerAlarmEventType
 import com.example.timer.TimerAlarmPlayer
 import com.example.timer.TimerAlarmScheduler
@@ -43,7 +46,10 @@ import com.example.timer.TimerMode
 import com.example.timer.TimerStatus
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -2032,6 +2038,344 @@ class TimerRobolectricTest {
       assertNotNull(outcome)
       assertEquals(25 * 60_000L, outcome!!.updatedState.accumulatedFocusMs)
       assertEquals(0L, outcome.updatedState.phaseCarryMs)
+    }
+
+  @Test
+  fun `cancelling caller job during fire still plays sound and posts notification`() = runTest {
+    val app = context.applicationContext as SyllabusApplication
+    Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+    AlarmDiagnosticLog.clear(app)
+    val notifManager = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    notifManager.cancelAll()
+
+    val bookId = app.database.syllabusDao().insertBook(BookEntity(name = "Physics"))
+    val chapterId =
+      app.database.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Optics", number = 1))
+
+    val enteredPlay = CompletableDeferred<Unit>()
+    var soundPlayed = false
+    var vibrated = false
+    TimerAlarmPlayer.setAudioBackendForTest(
+      object : AlarmAudioBackend {
+        override suspend fun playSound(context: Context): SoundAttemptResult {
+          enteredPlay.complete(Unit)
+          delay(120L)
+          soundPlayed = true
+          return SoundAttemptResult(started = true, method = TimerAlarmPlayer.METHOD_MEDIA_PLAYER_RAW)
+        }
+
+        override fun playVibration(context: Context): Boolean {
+          vibrated = true
+          return true
+        }
+
+        override fun stopAll() = Unit
+      }
+    )
+
+    try {
+      app.timerRepository.discardCurrentSession()
+      assertTrue(
+        app.timerRepository.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      val sessionId = app.database.timerDao().getActiveTimerStateOnce()!!.sessionId
+
+      val callerJob =
+        launch {
+          TimerAlarmPlayer.fireEvent(
+            context = app,
+            source = AlarmFireSource.PRIMARY,
+            eventType = TimerAlarmEventType.FOCUS_END,
+            sessionId = sessionId,
+            phaseIndex = 1,
+            expectedEventWallMs = System.currentTimeMillis(),
+          )
+        }
+      enteredPlay.await()
+      // Cancel caller (simulating schedulePrimaryBoundaryAlarm cancelling boundaryJob mid-fire)
+      callerJob.cancel()
+      callerJob.join()
+
+      assertTrue(soundPlayed)
+      assertTrue(vibrated)
+      val posted =
+        Shadows.shadowOf(notifManager).allNotifications.any {
+          it.channelId == NotificationHelper.TIMER_ALARM_CHANNEL_ID
+        }
+      assertTrue(posted)
+      assertEquals(TimerStatus.BREAK, app.database.timerDao().getActiveTimerStateOnce()!!.status)
+    } finally {
+      TimerAlarmPlayer.setAudioBackendForTest(null)
+      app.timerRepository.discardCurrentSession()
+    }
+  }
+
+  @Test
+  fun `alarm event is not lost when UserPreferencesRepository cache is empty`() = runTest {
+    val freshPrefs = UserPreferencesRepository(context)
+    // Persist disabled -> false -> enabled -> true via a separate instance, then read with cold cache
+    freshPrefs.setTimerAlarmEnabled(false)
+    freshPrefs.setTimerVibrationEnabled(true)
+
+    val coldPrefs = UserPreferencesRepository(context)
+    // Without calling .userPreferences.first() or any suspend read, snapshot reflects persisted mirror
+    val snapshot = coldPrefs.getCachedPreferencesSnapshot()
+    assertFalse(snapshot.timerAlarmEnabled)
+    assertTrue(snapshot.timerVibrationEnabled)
+
+    // Restore defaults and verify fire works immediately with cold cache
+    val app = context.applicationContext as SyllabusApplication
+    Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+    app.preferencesRepository.setTimerAlarmEnabled(true)
+    app.preferencesRepository.setTimerVibrationEnabled(true)
+
+    var soundPlayed = false
+    TimerAlarmPlayer.setAudioBackendForTest(
+      object : AlarmAudioBackend {
+        override suspend fun playSound(context: Context): SoundAttemptResult {
+          soundPlayed = true
+          return SoundAttemptResult(started = true, method = TimerAlarmPlayer.METHOD_MEDIA_PLAYER_RAW)
+        }
+
+        override fun playVibration(context: Context): Boolean = true
+
+        override fun stopAll() = Unit
+      }
+    )
+
+    try {
+      val bookId = app.database.syllabusDao().insertBook(BookEntity(name = "Cold Cache"))
+      val chapterId =
+        app.database.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Ch1", number = 1))
+      app.timerRepository.discardCurrentSession()
+      assertTrue(
+        app.timerRepository.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      val sessionId = app.database.timerDao().getActiveTimerStateOnce()!!.sessionId
+      val outcome =
+        TimerAlarmPlayer.fireEvent(
+          context = app,
+          source = AlarmFireSource.BACKUP,
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = System.currentTimeMillis(),
+        )
+      assertNotNull(outcome)
+      assertTrue(soundPlayed)
+    } finally {
+      TimerAlarmPlayer.setAudioBackendForTest(null)
+      app.timerRepository.discardCurrentSession()
+    }
+  }
+
+  @Test
+  fun `sound fallback posts non-silent channel notification when all direct audio candidates fail`() = runTest {
+    val app = context.applicationContext as SyllabusApplication
+    Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+    val notifManager = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    notifManager.cancelAll()
+    AlarmDiagnosticLog.clear(app)
+
+    // 1. Robolectric has no audio hardware: MediaPlayer/Ringtone candidates fail/report !isPlaying cleanly
+    TimerAlarmPlayer.setAudioBackendForTest(null)
+    val reportRealFailureFallback =
+      TimerAlarmPlayer.deliverAlarmAlert(
+        context = app,
+        eventLabel = "FOCUS_END",
+        sourceLabel = AlarmFireSource.PRIMARY.logLabel,
+        delayMs = 0L,
+        title = "Break started",
+        message = "Fallback test",
+        notificationId = NotificationHelper.TIMER_ALERT_PHASE_NOTIFICATION_ID,
+        playSound = true,
+        playVibration = true,
+      )
+    assertTrue(reportRealFailureFallback.channelEnabled)
+    assertTrue(reportRealFailureFallback.notificationPosted)
+    assertEquals(TimerAlarmPlayer.METHOD_CHANNEL_FALLBACK, reportRealFailureFallback.soundMethod)
+    assertTrue(reportRealFailureFallback.soundStarted)
+
+    // 2. When a candidate succeeds (e.g. Ringtone TYPE_ALARM fallback), method reports it
+    TimerAlarmPlayer.setAudioBackendForTest(
+      object : AlarmAudioBackend {
+        override suspend fun playSound(context: Context): SoundAttemptResult =
+          SoundAttemptResult(started = true, method = TimerAlarmPlayer.METHOD_RINGTONE_ALARM)
+
+        override fun playVibration(context: Context): Boolean = true
+
+        override fun stopAll() = Unit
+      }
+    )
+    try {
+      val reportRingtoneFallback = TimerAlarmPlayer.runTestAlarmNow(app)
+      assertTrue(reportRingtoneFallback.soundStarted)
+      assertEquals(TimerAlarmPlayer.METHOD_RINGTONE_ALARM, reportRingtoneFallback.soundMethod)
+    } finally {
+      TimerAlarmPlayer.setAudioBackendForTest(null)
+    }
+  }
+
+  @Test
+  fun `backup alarm still rings if primary threw before playing`() = runTest {
+    val app = context.applicationContext as SyllabusApplication
+    Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+    AlarmDiagnosticLog.clear(app)
+
+    var backupPlayed = false
+    TimerAlarmPlayer.setAudioBackendForTest(
+      object : AlarmAudioBackend {
+        override suspend fun playSound(context: Context): SoundAttemptResult {
+          backupPlayed = true
+          return SoundAttemptResult(started = true, method = TimerAlarmPlayer.METHOD_MEDIA_PLAYER_RAW)
+        }
+
+        override fun playVibration(context: Context): Boolean = true
+
+        override fun stopAll() = Unit
+      }
+    )
+
+    try {
+      val bookId = app.database.syllabusDao().insertBook(BookEntity(name = "Backup Rescue"))
+      val chapterId =
+        app.database.syllabusDao().insertChapter(ChapterEntity(bookId = bookId, name = "Ch 1", number = 1))
+      app.timerRepository.discardCurrentSession()
+      assertTrue(
+        app.timerRepository.startSession(
+          bookId = bookId,
+          chapterId = chapterId,
+          mode = TimerMode.POMODORO,
+          focusMinutes = 25,
+          breakMinutes = 5,
+        )
+      )
+      val state = app.database.timerDao().getActiveTimerStateOnce()!!
+      val expectedWall = state.phaseStartWallTimeMs + state.focusDurationMs
+
+      // Primary throws BEFORE audio/notify finishes -> fired mark & Room transition must NOT remain committed
+      val primaryFailure =
+        runCatching {
+          app.timerRepository.fireEvent(
+            source = AlarmFireSource.PRIMARY,
+            eventType = TimerAlarmEventType.FOCUS_END,
+            sessionId = state.sessionId,
+            phaseIndex = 1,
+            expectedEventWallMs = expectedWall,
+            onBeforeCommitAttempt = { _, _, _, _ ->
+              error("Simulated primary crash before play")
+            },
+          )
+        }
+      assertTrue(primaryFailure.isFailure)
+      assertEquals(TimerStatus.RUNNING, app.database.timerDao().getActiveTimerStateOnce()!!.status)
+
+      // Backup fires 2s later -> still rings and transitions phase!
+      val backupOutcome =
+        TimerAlarmPlayer.fireEvent(
+          context = app,
+          source = AlarmFireSource.BACKUP,
+          eventType = TimerAlarmEventType.FOCUS_END,
+          sessionId = state.sessionId,
+          phaseIndex = 1,
+          expectedEventWallMs = expectedWall,
+        )
+      assertNotNull(backupOutcome)
+      assertTrue(backupPlayed)
+      assertEquals(TimerStatus.BREAK, app.database.timerDao().getActiveTimerStateOnce()!!.status)
+    } finally {
+      TimerAlarmPlayer.setAudioBackendForTest(null)
+      app.timerRepository.discardCurrentSession()
+    }
+  }
+
+  @Test
+  fun `notification channel upgrades to timer_alarm_v2 deletes legacy channel and diag log caps at 20`() =
+    runTest {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      val legacyChannel =
+        android.app.NotificationChannel(
+          NotificationHelper.LEGACY_TIMER_ALARM_CHANNEL_ID,
+          "Legacy",
+          NotificationManager.IMPORTANCE_HIGH,
+        )
+      manager.createNotificationChannel(legacyChannel)
+      assertNotNull(manager.getNotificationChannel(NotificationHelper.LEGACY_TIMER_ALARM_CHANNEL_ID))
+
+      NotificationHelper.ensureNotificationChannel(context)
+      assertNull(manager.getNotificationChannel(NotificationHelper.LEGACY_TIMER_ALARM_CHANNEL_ID))
+      val v2 = manager.getNotificationChannel(NotificationHelper.TIMER_ALARM_CHANNEL_ID)
+      assertNotNull(v2)
+      assertEquals("timer_alarm_v2", NotificationHelper.TIMER_ALARM_CHANNEL_ID)
+      assertEquals(NotificationManager.IMPORTANCE_HIGH, v2!!.importance)
+
+      AlarmDiagnosticLog.clear(context)
+      for (i in 1..25) {
+        AlarmDiagnosticLog.record(
+          context = context,
+          eventType = "EVT_$i",
+          source = "primary",
+          outcome = AlarmDiagnosticLog.OUTCOME_PLAYED,
+          timestampMs = 1000L + i,
+        )
+      }
+      val entries = AlarmDiagnosticLog.getEntries(context)
+      assertEquals(20, entries.size)
+      assertEquals("EVT_25", entries.first().eventType)
+      assertEquals("EVT_6", entries.last().eventType)
+
+      // Test-in-10s schedules setAlarmClock and deduplicates primary vs backup cleanly
+      val app = context.applicationContext as SyllabusApplication
+      Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+      val alarmManager = app.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+      ShadowAlarmManager.setCanScheduleExactAlarms(true)
+      val testId = TimerAlarmScheduler.scheduleTestAlarmIn10Seconds(app)
+      val scheduledTestAlarm =
+        Shadows.shadowOf(alarmManager).scheduledAlarms.firstOrNull {
+          Shadows.shadowOf(it.operation).savedIntent.action == TimerAlarmScheduler.ACTION_TEST_ALARM
+        }
+      assertNotNull(scheduledTestAlarm)
+      TimerAlarmPlayer.setAudioBackendForTest(
+        object : AlarmAudioBackend {
+          override suspend fun playSound(context: Context): SoundAttemptResult =
+            SoundAttemptResult(true, TimerAlarmPlayer.METHOD_MEDIA_PLAYER_RAW)
+          override fun playVibration(context: Context): Boolean = true
+          override fun stopAll() = Unit
+        }
+      )
+      try {
+        val first =
+          TimerAlarmPlayer.fireTestAlarm(
+            app,
+            AlarmFireSource.PRIMARY,
+            testId,
+            System.currentTimeMillis(),
+          )
+        val duplicate =
+          TimerAlarmPlayer.fireTestAlarm(
+            app,
+            AlarmFireSource.BACKUP,
+            testId,
+            System.currentTimeMillis(),
+          )
+        assertNotNull(first)
+        assertNull(duplicate)
+      } finally {
+        TimerAlarmPlayer.setAudioBackendForTest(null)
+        ShadowAlarmManager.setCanScheduleExactAlarms(false)
+      }
     }
 }
 

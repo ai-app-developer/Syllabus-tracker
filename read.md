@@ -102,7 +102,7 @@ DESIGN RULES (very important)
 - **Navigation**: Navigation Compose (`@Serializable` type-safe routes)
 - **Persistence**: Room (`BookEntity`, `ChapterEntity`, `SyllabusDao`, `SyllabusDatabase`) + DataStore Preferences (`UserPreferencesRepository`)
 - **Architecture**: MVVM + `StateFlow` + Repository + Manual DI (`SyllabusApplication`)
-- **Notifications & Foreground Service**: `AlarmManager` + `BroadcastReceiver` (`StudyReminderReceiver`, `BootCompletedReceiver`, `TimerAlarmReceiver`) + `NotificationCompat`; `TimerForegroundService` (`foregroundServiceType="specialUse"`) runs the ongoing chronometer notification (`timer_ongoing_channel`) and the **PRIMARY** exact coroutine boundary alarm (`elapsedRealtime()`), while `TimerAlarmScheduler` simultaneously schedules a **BACKUP** `AlarmManager.setAlarmClock` at `eventTime + 2000 ms` (`TimerAlarmReceiver`), both sharing `TimerAlarmPlayer.fireEvent(...)` with Mutex + Room + `PrefsAlarmDeduplicator` deduplication via the `"timer_alarm"` channel (`IMPORTANCE_HIGH`, `USAGE_ALARM`)
+- **Notifications & Foreground Service**: `AlarmManager` + `BroadcastReceiver` (`StudyReminderReceiver`, `BootCompletedReceiver`, `TimerAlarmReceiver`) + `NotificationCompat`; `TimerForegroundService` (`foregroundServiceType="specialUse"`) runs the ongoing chronometer notification (`timer_ongoing_channel`) and the **PRIMARY** exact coroutine boundary alarm (`elapsedRealtime()`), while `TimerAlarmScheduler` simultaneously schedules a **BACKUP** `AlarmManager.setAlarmClock` at `eventTime + 2000 ms` (`TimerAlarmReceiver`), both sharing `TimerAlarmPlayer.fireEvent(...)` with Mutex + Room + `PrefsAlarmDeduplicator` deduplication via the `"timer_alarm_v2"` channel (`IMPORTANCE_HIGH`, `USAGE_ALARM`), `MediaPlayer` raw beep primary + `isPlaying`-verified `Ringtone` fallbacks, and a 20-entry `AlarmDiagnosticLog`.
 
 ### Package / Folder Structure
 ```text
@@ -777,6 +777,62 @@ AFTER FINISHING
 
 ---
 
-## 17. Resume Prompt
+## 17. Timer Alarm Delivery & Reliability Fix
 
-Read this file fully before editing to keep Room schema (`version = 4`, `MIGRATION_1_2` + `MIGRATION_2_3` + `MIGRATION_3_4`), Backup Schema v2 (`schemaVersion = 1..2` streaming JSON + Replace/Merge ID remapping), Release CI/R8 config, SQL aggregate/projection DAOs, scoped ViewModel/Compose `StateFlow`s, conflated `WidgetUpdater`, RemoteViews widgets, `TimerMath` (`phaseCarryMs` + `pausedFromStatus` state machine), and the Primary + Backup alarm system intact.
+### Bug Fix Request Summary (Prompt)
+```text
+BUG FIX for the existing "Syllabus Tracker" Android app (Kotlin + Compose + Room). Read read.md first. Do NOT change UI design (except one test button below), the pause/resume model (phaseCarryMs), database schema, widgets, backup or performance setup. Only fix the Timer Alarm so it reliably rings. Currently NO alarm rings at all (focus end, break end, goal reached). I analyzed the code; follow this root cause.
+```
+
+### Root Causes Fixed
+1. **Self-Cancellation on `fireEvent()` (`TimerRepository` / `TimerForegroundService` / `TimerAlarmPlayer`)**:
+   - Previously, `TimerRepository.fireEvent()` acquired `alarmDeduplicator` and updated Room BEFORE `TimerAlarmPlayer` suspended on `preferencesRepository.getCurrentPreferences()`. Room's Flow emitted the new phase to `TimerForegroundService.stateObserverJob`, which called `schedulePrimaryBoundaryAlarm()` -> `boundaryJob.cancel()`, aborting sound & notification at the suspension point while the backup `TimerAlarmReceiver` later skipped the event as `"skipped duplicate"`.
+   - **Fix**: `TimerAlarmPlayer.fireEvent()` now reads preferences synchronously via `preferencesRepository.getCachedPreferencesSnapshot()` (backed by a synchronous `SharedPreferences` mirror in `UserPreferencesRepository`) BEFORE entering `repo.fireEvent()`, runs fire/delivery inside `withContext(NonCancellable)` on `applicationScope` in `TimerForegroundService` with an `activeFiringJob` guard so `schedulePrimaryBoundaryAlarm()` never cancels an active fire, and executes audio/vibration/notification delivery via `onBeforeCommitAttempt` BEFORE `alarmDeduplicator.tryAcquire()` and Room phase commit (so a crash before play leaves no fired mark and lets the backup still ring).
+2. **Unverified `Ringtone.play()` & Missing Primary `MediaPlayer` Raw Fallback (`TimerAlarmPlayer`)**:
+   - Previously, `Ringtone.play()` was treated as success even when `isPlaying` was false (common on Flyme/empty default URIs), leaving `res/raw/timer_alarm_beep.wav` untried and posting silent notifications.
+   - **Fix**: `DefaultAlarmAudioBackend` now plays `res/raw/timer_alarm_beep.wav` FIRST using `MediaPlayer` (`USAGE_ALARM` + `CONTENT_TYPE_SONIFICATION`, `OnPreparedListener`, `OnErrorListener`, 1.5s prepare timeout, `OnCompletionListener`/3s release + audio focus abandon), then falls back to `RingtoneManager.TYPE_ALARM` and `RingtoneManager.TYPE_NOTIFICATION` verifying `ringtone.isPlaying` after a short 60ms settle before accepting success. When all audio candidates fail (and sound is enabled, not >15s late, and not DND-blocked), `NotificationHelper.showTimerAlert(..., silent = false)` lets the `"timer_alarm_v2"` channel play sound.
+3. **Debug-Only Logging & Legacy Channel Stale State**:
+   - **Fix**: Upgraded notification channel ID to `"timer_alarm_v2"` (deleting legacy `"timer_alarm"` on channel setup), kept `"TimerAlarm"` `Log.i` diagnostics active in release builds, added `AlarmDiagnosticLog` (20-entry `SharedPreferences` ring buffer, Room-free), and added a `"Test alarm"` row in `MoreScreen` opening `TimerAlarmTestDialog` (real report + `"Test in 10 seconds"` primary+`setAlarmClock` synthetic test + `"Alarm log"` dialog).
+
+### Alarm Flow Architecture
+```text
+Timer Boundary / Backup Receiver / Test Alarm
+  │
+  ├─ Synchronous Prefs Read: preferencesRepository.getCachedPreferencesSnapshot()
+  │    (in-memory cache OR SharedPreferences mirror — zero suspension)
+  │
+  ├─ Uncancellable Execution:
+  │    • TimerForegroundService tracks activeFiringJob + launches on app.applicationScope
+  │    • TimerAlarmPlayer.fireEvent & TimerRepository.fireEvent wrapped in withContext(NonCancellable)
+  │
+  ├─ Mutex Ordering (Check -> Deliver -> Commit):
+  │    1. Validate sessionId, active status (RUNNING/BREAK), cycle, early tolerance, !dedup.isMarked
+  │    2. Invoke onBeforeCommitAttempt -> TimerAlarmPlayer.deliverAlarmAlert():
+  │         • Check DND, 15s lateness threshold, STREAM_ALARM volume %, notif permission, channel
+  │         • Vibrate (400ms USAGE_ALARM) if enabled
+  │         • Sound chain:
+  │             [1] MediaPlayer (res/raw/timer_alarm_beep.wav)
+  │             [2] Ringtone TYPE_ALARM (verified ringtone.isPlaying)
+  │             [3] Ringtone TYPE_NOTIFICATION (verified ringtone.isPlaying)
+  │             [4] Non-silent notification on "timer_alarm_v2" (fallback when 1-3 fail)
+  │         • Record outcome in AlarmDiagnosticLog (last 20 entries in SharedPreferences) + Log.i
+  │    3. Only after step 2 completes without throwing:
+  │         • alarmDeduplicator.tryAcquire(eventKey, sessionId)
+  │         • Commit Room phase transition / goalNotified + sync next AlarmManager targets
+```
+
+### Checklist
+- [x] Room schema `version = 4` (`MIGRATION_1_2` + `MIGRATION_2_3` + `MIGRATION_3_4` with `phaseCarryMs` / `pausedFromStatus`) preserved unchanged
+- [x] Uncancellable `fireEvent` + `activeFiringJob` guard in `TimerForegroundService` + synchronous `UserPreferencesRepository` mirror
+- [x] `MediaPlayer` raw primary (`res/raw/timer_alarm_beep.wav`) + `isPlaying`-verified `Ringtone` fallbacks + `"timer_alarm_v2"` channel upgrade & legacy `"timer_alarm"` deletion
+- [x] Delivery-before-commit ordering so pre-play crashes never poison backup firing
+- [x] Release-safe `AlarmDiagnosticLog` (20 entries) + `More > Test alarm` diagnostics dialog + `"Test in 10 seconds"` + `"Alarm log"` dialog
+- [x] Robolectric unit tests covering cancellation survival, cold pref cache, audio fallbacks, pre-play failure backup rescue, `timer_alarm_v2` upgrade, and 10s test dedup
+- Known bugs: None reported
+
+---
+
+## 18. Resume Prompt
+
+Read this file fully before editing to keep Room schema (`version = 4`, `MIGRATION_1_2` + `MIGRATION_2_3` + `MIGRATION_3_4`), Backup Schema v2 (`schemaVersion = 1..2` streaming JSON + Replace/Merge ID remapping), Release CI/R8 config, SQL aggregate/projection DAOs, scoped ViewModel/Compose `StateFlow`s, conflated `WidgetUpdater`, RemoteViews widgets, `TimerMath` (`phaseCarryMs` + `pausedFromStatus` state machine), and the Primary + Backup `"timer_alarm_v2"` alarm system (`NonCancellable` + synchronous pref snapshot + `MediaPlayer` raw / verified `Ringtone` fallbacks + `AlarmDiagnosticLog`) intact.
+

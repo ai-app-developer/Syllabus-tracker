@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material.icons.outlined.VerifiedUser
@@ -54,6 +55,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,8 +72,15 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.preferences.UserPreferences
 import com.example.notifications.NotificationHelper
+import com.example.timer.AlarmDiagnosticEntry
+import com.example.timer.AlarmDiagnosticLog
+import com.example.timer.AlarmTestReport
+import com.example.timer.TimerAlarmPlayer
 import com.example.timer.TimerAlarmScheduler
+import com.example.ui.components.AlarmDiagnosticLogDialog
+import com.example.ui.components.TimerAlarmTestDialog
 import com.example.ui.components.TimerPermissionsChecklistDialog
+import kotlinx.coroutines.launch
 import com.example.ui.theme.AppBackground
 import com.example.ui.theme.CardSurface
 import com.example.ui.theme.ErrorRed
@@ -104,6 +113,7 @@ fun MoreScreen(
 ) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
+  val coroutineScope = rememberCoroutineScope()
   var hasPermission by remember {
     mutableStateOf(NotificationHelper.hasNotificationPermission(context))
   }
@@ -111,6 +121,11 @@ fun MoreScreen(
     mutableStateOf(TimerAlarmScheduler.canScheduleExactAlarms(context))
   }
   var showPermissionChecklistDialog by remember { mutableStateOf(false) }
+  var testAlarmReport by remember { mutableStateOf<AlarmTestReport?>(null) }
+  var isRunningAlarmTest by remember { mutableStateOf(false) }
+  var scheduled10sStatus by remember { mutableStateOf<String?>(null) }
+  var showAlarmLogDialog by remember { mutableStateOf(false) }
+  var alarmLogEntries by remember { mutableStateOf<List<AlarmDiagnosticEntry>>(emptyList()) }
 
   DisposableEffect(lifecycleOwner, context) {
     val observer = LifecycleEventObserver { _, event ->
@@ -691,6 +706,64 @@ fun MoreScreen(
 
           HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
 
+          Surface(
+            onClick = {
+              if (!isRunningAlarmTest) {
+                isRunningAlarmTest = true
+                scheduled10sStatus = null
+                coroutineScope.launch {
+                  try {
+                    testAlarmReport = TimerAlarmPlayer.runTestAlarmNow(context)
+                  } finally {
+                    isRunningAlarmTest = false
+                  }
+                }
+              }
+            },
+            color = CardSurface,
+            modifier = Modifier.fillMaxWidth().testTag("more_test_alarm_row"),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(16.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Box(
+                modifier =
+                  Modifier.size(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(LightIndigoTint),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.Outlined.NotificationsActive,
+                  contentDescription = null,
+                  tint = PrimaryIndigo,
+                  modifier = Modifier.size(20.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(14.dp))
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = "Test alarm",
+                  style = MaterialTheme.typography.titleMedium,
+                  color = TextPrimary,
+                )
+                Text(
+                  text = "Ring now, schedule 10s test, or view alarm log",
+                  style = MaterialTheme.typography.bodyMedium,
+                  color = TextSecondary,
+                )
+              }
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = "Test timer alarm",
+                tint = TextSecondary,
+              )
+            }
+          }
+
+          HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+
           Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -928,6 +1001,47 @@ fun MoreScreen(
       isStartFlow = false,
       onDismiss = { showPermissionChecklistDialog = false },
       onContinue = { showPermissionChecklistDialog = false },
+    )
+  }
+
+  testAlarmReport?.let { currentReport ->
+    TimerAlarmTestDialog(
+      report = currentReport,
+      isRunningTest = isRunningAlarmTest,
+      scheduled10sStatus = scheduled10sStatus,
+      onRunTestAgain = {
+        if (!isRunningAlarmTest) {
+          isRunningAlarmTest = true
+          coroutineScope.launch {
+            try {
+              testAlarmReport = TimerAlarmPlayer.runTestAlarmNow(context)
+            } finally {
+              isRunningAlarmTest = false
+            }
+          }
+        }
+      },
+      onSchedule10sTest = {
+        val testId = TimerAlarmScheduler.scheduleTestAlarmIn10Seconds(context)
+        scheduled10sStatus =
+          "Scheduled 10s test ($testId): primary timer at +10s and setAlarmClock backup at +12s. You can lock the screen now."
+      },
+      onOpenAlarmLog = {
+        alarmLogEntries = AlarmDiagnosticLog.getEntries(context)
+        showAlarmLogDialog = true
+      },
+      onDismiss = { testAlarmReport = null },
+    )
+  }
+
+  if (showAlarmLogDialog) {
+    AlarmDiagnosticLogDialog(
+      entries = alarmLogEntries,
+      onClear = {
+        AlarmDiagnosticLog.clear(context)
+        alarmLogEntries = emptyList()
+      },
+      onDismiss = { showAlarmLogDialog = false },
     )
   }
 }

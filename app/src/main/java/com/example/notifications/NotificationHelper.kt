@@ -26,12 +26,14 @@ import com.example.timer.TimerStatus
 object NotificationHelper {
   const val CHANNEL_ID = "syllabus_study_reminders"
   const val TIMER_ONGOING_CHANNEL_ID = "syllabus_timer_ongoing"
-  const val TIMER_ALARM_CHANNEL_ID = "timer_alarm"
+  const val TIMER_ALARM_CHANNEL_ID = "timer_alarm_v2"
+  const val LEGACY_TIMER_ALARM_CHANNEL_ID = "timer_alarm"
 
   private const val NOTIFICATION_ID = 1001
   const val TIMER_ONGOING_NOTIFICATION_ID = 2001
   const val TIMER_ALERT_PHASE_NOTIFICATION_ID = 2010
   const val TIMER_ALERT_GOAL_NOTIFICATION_ID = 2011
+  const val TIMER_ALERT_TEST_NOTIFICATION_ID = 2012
 
   const val EXTRA_TIMER_ACTION = "extra_timer_action"
   const val TIMER_ACTION_OPEN_STUDYING = "com.example.action.OPEN_STUDYING"
@@ -66,6 +68,8 @@ object NotificationHelper {
           }
       manager.createNotificationChannel(timerChannel)
     }
+
+    runCatching { manager.deleteNotificationChannel(LEGACY_TIMER_ALARM_CHANNEL_ID) }
 
     if (manager.getNotificationChannel(TIMER_ALARM_CHANNEL_ID) == null) {
       val alarmSoundUri =
@@ -104,6 +108,15 @@ object NotificationHelper {
   fun isBatteryOptimizationIgnored(context: Context): Boolean {
     val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return false
     return runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(false)
+  }
+
+  fun isTimerAlarmChannelEnabled(context: Context): Boolean {
+    ensureNotificationChannel(context)
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
+    val channel = manager.getNotificationChannel(TIMER_ALARM_CHANNEL_ID) ?: return false
+    return NotificationManagerCompat.from(context).areNotificationsEnabled() &&
+      channel.importance != NotificationManager.IMPORTANCE_NONE &&
+      channel.importance >= NotificationManager.IMPORTANCE_DEFAULT
   }
 
   fun isTimerAlarmChannelSoundAllowed(context: Context): Boolean {

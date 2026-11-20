@@ -77,6 +77,9 @@ import com.example.data.local.entity.SessionEventEntity
 import com.example.data.repository.ActiveSessionMetadata
 import com.example.data.repository.RecoveryPromptData
 import com.example.notifications.NotificationHelper
+import com.example.timer.AlarmDiagnosticEntry
+import com.example.timer.AlarmDiagnosticLog
+import com.example.timer.AlarmTestReport
 import com.example.timer.ComputedTimerMetrics
 import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerMath
@@ -1049,4 +1052,297 @@ private fun openAppNotificationSettings(context: Context) {
     }
   }
 }
+
+@Composable
+fun TimerAlarmTestDialog(
+  report: AlarmTestReport,
+  isRunningTest: Boolean,
+  scheduled10sStatus: String?,
+  onRunTestAgain: () -> Unit,
+  onSchedule10sTest: () -> Unit,
+  onOpenAlarmLog: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = CardSurface,
+    shape = RoundedCornerShape(16.dp),
+    title = {
+      Text(
+        text = "Timer alarm test",
+        style = MaterialTheme.typography.titleLarge,
+        color = TextPrimary,
+      )
+    },
+    text = {
+      Column(
+        modifier =
+          Modifier.fillMaxWidth()
+            .heightIn(max = 430.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        TestResultRow(
+          label = "Sound started",
+          value = if (report.soundStarted) "Yes (${report.soundMethod})" else "No (${report.soundMethod})",
+          healthy = report.soundStarted,
+        )
+        TestResultRow(
+          label = "Vibration",
+          value = if (report.vibrationTriggered) "Yes" else "No",
+          healthy = report.vibrationTriggered,
+        )
+        TestResultRow(
+          label = "Notification permission",
+          value = if (report.notificationPermissionGranted) "Granted" else "Denied",
+          healthy = report.notificationPermissionGranted,
+        )
+        TestResultRow(
+          label = "Alarm volume",
+          value = "${report.alarmVolumePercent}%",
+          healthy = report.alarmVolumePercent > 0,
+        )
+        TestResultRow(
+          label = "Do Not Disturb",
+          value = report.dndStatusLabel,
+          healthy = !report.dndBlocked,
+        )
+        TestResultRow(
+          label = "Exact alarm permission",
+          value = if (report.exactAlarmAllowed) "Allowed" else "Denied",
+          healthy = report.exactAlarmAllowed,
+        )
+        TestResultRow(
+          label = "Channel enabled",
+          value = if (report.channelEnabled) "Yes (timer_alarm_v2)" else "No",
+          healthy = report.channelEnabled,
+        )
+
+        if (!scheduled10sStatus.isNullOrBlank()) {
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = LightIndigoTint.copy(alpha = 0.6f),
+            border = BorderStroke(1.dp, HairlineBorder),
+            modifier = Modifier.fillMaxWidth().testTag("test_alarm_10s_status"),
+          ) {
+            Text(
+              text = scheduled10sStatus,
+              style = MaterialTheme.typography.bodySmall,
+              color = TextPrimary,
+              modifier = Modifier.padding(12.dp),
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        OutlinedButton(
+          onClick = onSchedule10sTest,
+          shape = RoundedCornerShape(10.dp),
+          border = BorderStroke(1.dp, PrimaryIndigo),
+          modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("test_alarm_10s_button"),
+        ) {
+          Text(
+            text = "Test in 10 seconds",
+            color = PrimaryIndigo,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          OutlinedButton(
+            onClick = onOpenAlarmLog,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, HairlineBorder),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("test_alarm_log_button"),
+          ) {
+            Text(text = "Alarm log", color = TextPrimary)
+          }
+          OutlinedButton(
+            onClick = onRunTestAgain,
+            enabled = !isRunningTest,
+            shape = RoundedCornerShape(10.dp),
+            border = BorderStroke(1.dp, HairlineBorder),
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("test_alarm_run_again_button"),
+          ) {
+            Text(text = if (isRunningTest) "Testing..." else "Run again", color = PrimaryIndigo)
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        modifier = Modifier.testTag("test_alarm_done_button"),
+      ) {
+        Text(text = "Done", color = Color.White)
+      }
+    },
+  )
+}
+
+@Composable
+private fun TestResultRow(
+  label: String,
+  value: String,
+  healthy: Boolean,
+) {
+  Surface(
+    shape = RoundedCornerShape(10.dp),
+    color = AppBackground,
+    border = BorderStroke(1.dp, HairlineBorder),
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = label,
+        style = MaterialTheme.typography.bodyMedium,
+        color = TextSecondary,
+        modifier = Modifier.weight(1f).padding(end = 8.dp),
+      )
+      Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = if (healthy) LightGreenTint else LightRedTint,
+      ) {
+        Text(
+          text = value,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.SemiBold,
+          color = if (healthy) SuccessGreen else ErrorRed,
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+fun AlarmDiagnosticLogDialog(
+  entries: List<AlarmDiagnosticEntry>,
+  onClear: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val timeFormatter = remember {
+    DateTimeFormatter.ofPattern("MM-dd HH:mm:ss", Locale.US)
+  }
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = CardSurface,
+    shape = RoundedCornerShape(16.dp),
+    title = {
+      Text(
+        text = "Alarm log (last 20)",
+        style = MaterialTheme.typography.titleLarge,
+        color = TextPrimary,
+      )
+    },
+    text = {
+      if (entries.isEmpty()) {
+        Text(
+          text = "No alarm events recorded yet.",
+          style = MaterialTheme.typography.bodyMedium,
+          color = TextSecondary,
+        )
+      } else {
+        Column(
+          modifier =
+            Modifier.fillMaxWidth()
+              .heightIn(max = 400.dp)
+              .verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          entries.forEach { entry ->
+            val timeText =
+              remember(entry.timestampMs) {
+                Instant.ofEpochMilli(entry.timestampMs)
+                  .atZone(ZoneId.systemDefault())
+                  .format(timeFormatter)
+              }
+            val isSuccess = entry.outcome == AlarmDiagnosticLog.OUTCOME_PLAYED
+            Surface(
+              shape = RoundedCornerShape(10.dp),
+              color = AppBackground,
+              border = BorderStroke(1.dp, HairlineBorder),
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Text(
+                    text = "${entry.eventType} • ${entry.source}",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextPrimary,
+                  )
+                  Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (isSuccess) LightGreenTint else LightIndigoTint,
+                  ) {
+                    Text(
+                      text = entry.outcome,
+                      fontSize = 11.sp,
+                      fontWeight = FontWeight.SemiBold,
+                      color = if (isSuccess) SuccessGreen else PrimaryIndigo,
+                      modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                  }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                  text = timeText,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = TextSecondary,
+                )
+                if (entry.detail.isNotBlank()) {
+                  Spacer(modifier = Modifier.height(2.dp))
+                  Text(
+                    text = entry.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      Button(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        modifier = Modifier.testTag("alarm_log_close_button"),
+      ) {
+        Text(text = "Close", color = Color.White)
+      }
+    },
+    dismissButton =
+      if (entries.isNotEmpty()) {
+        {
+          TextButton(
+            onClick = onClear,
+            modifier = Modifier.testTag("alarm_log_clear_button"),
+          ) {
+            Text(text = "Clear", color = ErrorRed)
+          }
+        }
+      } else {
+        null
+      },
+  )
+}
+
 
