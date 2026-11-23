@@ -65,14 +65,7 @@ import com.example.data.local.entity.SessionEventEntity
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.ui.components.SessionDetailDialog
-import com.example.ui.theme.AppBackground
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.ErrorRed
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.AppTheme
 import com.example.ui.viewmodel.HistoryDateFilter
 import com.example.ui.viewmodel.HistorySortOrder
 import com.example.ui.viewmodel.ReadingHistoryUiState
@@ -104,6 +97,7 @@ fun ReadingHistoryScreen(
   onDeleteSession: (Long) -> Unit,
   onStartNewSession: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   var showSortMenu by remember { mutableStateOf(false) }
   var selectedSessionForDetail by remember { mutableStateOf<ReadingSessionWithMeta?>(null) }
   var pendingDeleteSession by remember { mutableStateOf<ReadingSessionWithMeta?>(null) }
@@ -116,7 +110,7 @@ fun ReadingHistoryScreen(
     }.collectAsStateWithLifecycle(initialValue = emptyList())
 
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground).padding(innerPadding),
+    modifier = Modifier.fillMaxSize().background(colors.screenBackground).padding(innerPadding),
     contentAlignment = Alignment.TopCenter,
   ) {
     Column(
@@ -135,13 +129,13 @@ fun ReadingHistoryScreen(
           Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = "Back",
-            tint = TextPrimary,
+            tint = colors.textPrimary,
           )
         }
         Text(
           text = stringResource(R.string.reading_history_title),
           style = MaterialTheme.typography.titleLarge,
-          color = TextPrimary,
+          color = colors.textPrimary,
           modifier = Modifier.weight(1f).padding(start = 4.dp),
         )
         IconButton(
@@ -151,7 +145,7 @@ fun ReadingHistoryScreen(
           Icon(
             imageVector = if (state.historyFilter.isSearchActive) Icons.Default.Close else Icons.Default.Search,
             contentDescription = "Search sessions",
-            tint = TextPrimary,
+            tint = colors.textPrimary,
           )
         }
         Box {
@@ -162,20 +156,20 @@ fun ReadingHistoryScreen(
             Icon(
               imageVector = Icons.AutoMirrored.Filled.Sort,
               contentDescription = "Sort sessions",
-              tint = TextPrimary,
+              tint = colors.textPrimary,
             )
           }
           DropdownMenu(
             expanded = showSortMenu,
             onDismissRequest = { showSortMenu = false },
-            containerColor = CardSurface,
+            containerColor = colors.dialogSurface,
           ) {
             HistorySortOrder.entries.forEach { order ->
               DropdownMenuItem(
                 text = {
                   Text(
                     text = order.label,
-                    color = if (state.historyFilter.sortOrder == order) PrimaryIndigo else TextPrimary,
+                    color = if (state.historyFilter.sortOrder == order) colors.primary else colors.textPrimary,
                     fontWeight = if (state.historyFilter.sortOrder == order) FontWeight.SemiBold else FontWeight.Normal,
                   )
                 },
@@ -194,15 +188,18 @@ fun ReadingHistoryScreen(
         OutlinedTextField(
           value = state.historyFilter.searchQuery,
           onValueChange = onSearchQueryChange,
-          placeholder = { Text("Search book, chapter, or notes", color = TextSecondary) },
+          placeholder = { Text("Search book, chapter, or notes", color = colors.textSecondary) },
           singleLine = true,
           shape = RoundedCornerShape(12.dp),
           colors =
             OutlinedTextFieldDefaults.colors(
-              focusedBorderColor = PrimaryIndigo,
-              unfocusedBorderColor = HairlineBorder,
-              focusedContainerColor = CardSurface,
-              unfocusedContainerColor = CardSurface,
+              focusedBorderColor = colors.primary,
+              unfocusedBorderColor = colors.border,
+              focusedContainerColor = colors.surface,
+              unfocusedContainerColor = colors.surface,
+              focusedTextColor = colors.textPrimary,
+              unfocusedTextColor = colors.textPrimary,
+              cursorColor = colors.primary,
             ),
           modifier = Modifier.fillMaxWidth().testTag("history_search_input"),
         )
@@ -222,10 +219,10 @@ fun ReadingHistoryScreen(
               label = { Text(df.label) },
               colors =
                 FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = PrimaryIndigo,
-                  selectedLabelColor = Color.White,
-                  containerColor = CardSurface,
-                  labelColor = TextPrimary,
+                  selectedContainerColor = colors.primarySolid,
+                  selectedLabelColor = colors.onPrimary,
+                  containerColor = colors.surface,
+                  labelColor = colors.textPrimary,
                 ),
             )
           }
@@ -244,10 +241,10 @@ fun ReadingHistoryScreen(
             label = { Text("All Books") },
             colors =
               FilterChipDefaults.filterChipColors(
-                selectedContainerColor = LightIndigoTint,
-                selectedLabelColor = PrimaryIndigo,
-                containerColor = CardSurface,
-                labelColor = TextSecondary,
+                selectedContainerColor = colors.tint,
+                selectedLabelColor = colors.primary,
+                containerColor = colors.surface,
+                labelColor = colors.textSecondary,
               ),
           )
           state.books.forEach { book ->
@@ -258,10 +255,10 @@ fun ReadingHistoryScreen(
                 label = { Text(book.name, maxLines = 1) },
                 colors =
                   FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = LightIndigoTint,
-                    selectedLabelColor = PrimaryIndigo,
-                    containerColor = CardSurface,
-                    labelColor = TextSecondary,
+                    selectedContainerColor = colors.tint,
+                    selectedLabelColor = colors.primary,
+                    containerColor = colors.surface,
+                    labelColor = colors.textSecondary,
                   ),
               )
             }
@@ -281,10 +278,10 @@ fun ReadingHistoryScreen(
               label = { Text("All Chapters") },
               colors =
                 FilterChipDefaults.filterChipColors(
-                  selectedContainerColor = LightIndigoTint,
-                  selectedLabelColor = PrimaryIndigo,
-                  containerColor = CardSurface,
-                  labelColor = TextSecondary,
+                  selectedContainerColor = colors.tint,
+                  selectedLabelColor = colors.primary,
+                  containerColor = colors.surface,
+                  labelColor = colors.textSecondary,
                 ),
             )
             chaptersForFilter.forEach { ch ->
@@ -295,10 +292,10 @@ fun ReadingHistoryScreen(
                   label = { Text("Ch ${ch.number}: ${ch.name}", maxLines = 1) },
                   colors =
                     FilterChipDefaults.filterChipColors(
-                      selectedContainerColor = LightIndigoTint,
-                      selectedLabelColor = PrimaryIndigo,
-                      containerColor = CardSurface,
-                      labelColor = TextSecondary,
+                      selectedContainerColor = colors.tint,
+                      selectedLabelColor = colors.primary,
+                      containerColor = colors.surface,
+                      labelColor = colors.textSecondary,
                     ),
                 )
               }
@@ -322,13 +319,13 @@ fun ReadingHistoryScreen(
               modifier =
                 Modifier.size(56.dp)
                   .clip(RoundedCornerShape(16.dp))
-                  .background(LightIndigoTint),
+                  .background(colors.tint),
               contentAlignment = Alignment.Center,
             ) {
               Icon(
                 imageVector = Icons.Outlined.History,
                 contentDescription = null,
-                tint = PrimaryIndigo,
+                tint = colors.primary,
                 modifier = Modifier.size(28.dp),
               )
             }
@@ -338,7 +335,7 @@ fun ReadingHistoryScreen(
                 if (!state.hasAnySessions) "No Reading Sessions Yet"
                 else "No Matching Sessions",
               style = MaterialTheme.typography.titleLarge,
-              color = TextPrimary,
+              color = colors.textPrimary,
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
@@ -349,7 +346,7 @@ fun ReadingHistoryScreen(
                   "Try clearing your search or selecting a wider date filter."
                 },
               style = MaterialTheme.typography.bodyMedium,
-              color = TextSecondary,
+              color = colors.textSecondary,
               textAlign = TextAlign.Center,
             )
             if (!state.hasAnySessions) {
@@ -357,10 +354,14 @@ fun ReadingHistoryScreen(
               Button(
                 onClick = onStartNewSession,
                 shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                colors =
+                  ButtonDefaults.buttonColors(
+                    containerColor = colors.primarySolid,
+                    contentColor = colors.onPrimary,
+                  ),
                 modifier = Modifier.testTag("history_empty_start_button"),
               ) {
-                Text("Start Study Timer", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text("Start Study Timer", fontWeight = FontWeight.SemiBold)
               }
             }
           }
@@ -405,13 +406,13 @@ fun ReadingHistoryScreen(
   pendingDeleteSession?.let { target ->
     AlertDialog(
       onDismissRequest = { pendingDeleteSession = null },
-      containerColor = CardSurface,
+      containerColor = colors.surface,
       shape = RoundedCornerShape(16.dp),
       title = {
         Text(
           text = "Delete Session?",
           style = MaterialTheme.typography.titleLarge,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
       },
       text = {
@@ -419,7 +420,7 @@ fun ReadingHistoryScreen(
           text =
             "Delete the ${TimerMath.formatShortElapsed(target.session.activeFocusMs)} session for ${target.bookName} — Chapter ${target.chapterNumber}: ${target.chapterName}?",
           style = MaterialTheme.typography.bodyMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       },
       confirmButton = {
@@ -429,15 +430,15 @@ fun ReadingHistoryScreen(
             pendingDeleteSession = null
           },
           shape = RoundedCornerShape(12.dp),
-          colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+          colors = ButtonDefaults.buttonColors(containerColor = colors.error),
           modifier = Modifier.testTag("confirm_delete_session_button"),
         ) {
-          Text("Delete", color = Color.White)
+          Text("Delete", color = colors.onPrimary)
         }
       },
       dismissButton = {
         TextButton(onClick = { pendingDeleteSession = null }) {
-          Text("Cancel", color = TextSecondary)
+          Text("Cancel", color = colors.textSecondary)
         }
       },
     )
@@ -449,6 +450,7 @@ private fun ReadingSessionCard(
   item: ReadingSessionWithMeta,
   onClick: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val (dateLabel, startLabel) =
     remember(item.session.startWallTimeMs) {
       val zoned = Instant.ofEpochMilli(item.session.startWallTimeMs).atZone(ZoneId.systemDefault())
@@ -464,9 +466,9 @@ private fun ReadingSessionCard(
   Surface(
     onClick = onClick,
     shape = RoundedCornerShape(16.dp),
-    color = CardSurface,
-    border = BorderStroke(1.dp, HairlineBorder),
-    shadowElevation = 1.dp,
+    color = colors.surface,
+    border = BorderStroke(1.dp, colors.border),
+    shadowElevation = if (colors.isAmoled || colors.isGlass) 0.dp else 1.dp,
     modifier = Modifier.fillMaxWidth().testTag("history_session_card_${item.session.id}"),
   ) {
     Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
@@ -478,13 +480,13 @@ private fun ReadingSessionCard(
           modifier =
             Modifier.size(40.dp)
               .clip(RoundedCornerShape(10.dp))
-              .background(LightIndigoTint),
+              .background(colors.tint),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.AutoMirrored.Outlined.MenuBook,
             contentDescription = null,
-            tint = PrimaryIndigo,
+            tint = colors.primary,
             modifier = Modifier.size(20.dp),
           )
         }
@@ -493,14 +495,14 @@ private fun ReadingSessionCard(
           Text(
             text = item.bookName,
             style = MaterialTheme.typography.titleMedium,
-            color = TextPrimary,
+            color = colors.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
           Text(
             text = "Chapter ${item.chapterNumber}: ${item.chapterName}",
             style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary,
+            color = colors.textSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
@@ -508,12 +510,12 @@ private fun ReadingSessionCard(
         Spacer(modifier = Modifier.width(8.dp))
         Surface(
           shape = RoundedCornerShape(50),
-          color = LightIndigoTint,
+          color = colors.tint,
         ) {
           Text(
             text = TimerMath.formatShortElapsed(item.session.activeFocusMs),
             style = MaterialTheme.typography.labelLarge,
-            color = PrimaryIndigo,
+            color = colors.primary,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
           )
@@ -530,13 +532,13 @@ private fun ReadingSessionCard(
         Text(
           text = "$dateLabel • $startLabel",
           style = MaterialTheme.typography.labelMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
         Text(
           text =
             "${if (item.session.mode == TimerMode.POMODORO) "Pomodoro" else "Stopwatch"} • Focus $focusPct%",
           style = MaterialTheme.typography.labelMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       }
 
@@ -545,7 +547,7 @@ private fun ReadingSessionCard(
         Text(
           text = item.session.notes,
           style = MaterialTheme.typography.bodyMedium,
-          color = TextPrimary,
+          color = colors.textPrimary,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )

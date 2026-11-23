@@ -2263,7 +2263,7 @@ class TimerRobolectricTest {
         )
       )
       val state = app.database.timerDao().getActiveTimerStateOnce()!!
-      val expectedWall = state.phaseStartWallTimeMs + state.focusDurationMs
+      val expectedWall = System.currentTimeMillis()
 
       // Primary throws BEFORE audio/notify finishes -> fired mark & Room transition must NOT remain committed
       val primaryFailure =

@@ -28,6 +28,9 @@ data class UserPreferences(
   val timerPermissionChecklistShown: Boolean = false,
   val pomodoroFocusMinutes: Int = DEFAULT_POMODORO_FOCUS_MINUTES,
   val pomodoroBreakMinutes: Int = DEFAULT_POMODORO_BREAK_MINUTES,
+  val widgetPromptShownCount: Int = 0,
+  val widgetLastPromptTime: Long = 0L,
+  val widgetEverAdded: Boolean = false,
 ) {
   companion object {
     const val DEFAULT_DAILY_GOAL = 2
@@ -50,6 +53,9 @@ class UserPreferencesRepository(private val context: Context) {
     val TIMER_PERMISSION_CHECKLIST_SHOWN = booleanPreferencesKey("timer_permission_checklist_shown")
     val POMODORO_FOCUS_MINUTES = intPreferencesKey("pomodoro_focus_minutes")
     val POMODORO_BREAK_MINUTES = intPreferencesKey("pomodoro_break_minutes")
+    val WIDGET_PROMPT_SHOWN_COUNT = intPreferencesKey("widget_prompt_shown_count")
+    val WIDGET_LAST_PROMPT_TIME = longPreferencesKey("widget_last_prompt_time")
+    val WIDGET_EVER_ADDED = booleanPreferencesKey("widget_ever_added")
   }
 
   private val syncPrefs =
@@ -78,6 +84,9 @@ class UserPreferencesRepository(private val context: Context) {
           pomodoroBreakMinutes =
             (prefs[Keys.POMODORO_BREAK_MINUTES] ?: UserPreferences.DEFAULT_POMODORO_BREAK_MINUTES)
               .coerceIn(1, 60),
+          widgetPromptShownCount = (prefs[Keys.WIDGET_PROMPT_SHOWN_COUNT] ?: 0).coerceAtLeast(0),
+          widgetLastPromptTime = (prefs[Keys.WIDGET_LAST_PROMPT_TIME] ?: 0L).coerceAtLeast(0L),
+          widgetEverAdded = prefs[Keys.WIDGET_EVER_ADDED] ?: false,
         )
       }
       .onEach { loaded ->
@@ -167,7 +176,36 @@ class UserPreferencesRepository(private val context: Context) {
     }
   }
 
+  suspend fun recordWidgetPromptShown(shownAtMs: Long) {
+    val safeTime = shownAtMs.coerceAtLeast(0L)
+    var nextCount = 1
+    context.dataStore.edit { prefs ->
+      val currentCount = (prefs[Keys.WIDGET_PROMPT_SHOWN_COUNT] ?: 0).coerceAtLeast(0)
+      nextCount = currentCount + 1
+      prefs[Keys.WIDGET_PROMPT_SHOWN_COUNT] = nextCount
+      prefs[Keys.WIDGET_LAST_PROMPT_TIME] = safeTime
+    }
+    val updated =
+      getCachedPreferencesSnapshot().copy(
+        widgetPromptShownCount = nextCount,
+        widgetLastPromptTime = safeTime,
+      )
+    cachedPrefs = updated
+    persistSyncMirror(updated)
+  }
+
+  suspend fun markWidgetEverAdded() {
+    val current = getCachedPreferencesSnapshot()
+    if (!current.widgetEverAdded) {
+      val updated = current.copy(widgetEverAdded = true)
+      cachedPrefs = updated
+      persistSyncMirror(updated)
+    }
+    context.dataStore.edit { prefs -> prefs[Keys.WIDGET_EVER_ADDED] = true }
+  }
+
   suspend fun restorePreferences(target: UserPreferences): UserPreferences {
+    val existing = getCurrentPreferences()
     val sanitized =
       target.copy(
         dailyGoal = target.dailyGoal.coerceIn(1, 50),
@@ -175,6 +213,9 @@ class UserPreferencesRepository(private val context: Context) {
         reminderMinute = target.reminderMinute.coerceIn(0, 59),
         pomodoroFocusMinutes = target.pomodoroFocusMinutes.coerceIn(1, 180),
         pomodoroBreakMinutes = target.pomodoroBreakMinutes.coerceIn(1, 60),
+        widgetPromptShownCount = existing.widgetPromptShownCount,
+        widgetLastPromptTime = existing.widgetLastPromptTime,
+        widgetEverAdded = existing.widgetEverAdded,
       )
     cachedPrefs = sanitized
     persistSyncMirror(sanitized)
@@ -205,6 +246,9 @@ class UserPreferencesRepository(private val context: Context) {
       timerPermissionChecklistShown = syncPrefs.getBoolean(SYNC_CHECKLIST_SHOWN, false),
       pomodoroFocusMinutes = syncPrefs.getInt(SYNC_POMO_FOCUS, UserPreferences.DEFAULT_POMODORO_FOCUS_MINUTES).coerceIn(1, 180),
       pomodoroBreakMinutes = syncPrefs.getInt(SYNC_POMO_BREAK, UserPreferences.DEFAULT_POMODORO_BREAK_MINUTES).coerceIn(1, 60),
+      widgetPromptShownCount = syncPrefs.getInt(SYNC_WIDGET_PROMPT_SHOWN_COUNT, 0).coerceAtLeast(0),
+      widgetLastPromptTime = syncPrefs.getLong(SYNC_WIDGET_LAST_PROMPT_TIME, 0L).coerceAtLeast(0L),
+      widgetEverAdded = syncPrefs.getBoolean(SYNC_WIDGET_EVER_ADDED, false),
     )
   }
 
@@ -220,6 +264,9 @@ class UserPreferencesRepository(private val context: Context) {
       .putBoolean(SYNC_CHECKLIST_SHOWN, prefs.timerPermissionChecklistShown)
       .putInt(SYNC_POMO_FOCUS, prefs.pomodoroFocusMinutes)
       .putInt(SYNC_POMO_BREAK, prefs.pomodoroBreakMinutes)
+      .putInt(SYNC_WIDGET_PROMPT_SHOWN_COUNT, prefs.widgetPromptShownCount)
+      .putLong(SYNC_WIDGET_LAST_PROMPT_TIME, prefs.widgetLastPromptTime)
+      .putBoolean(SYNC_WIDGET_EVER_ADDED, prefs.widgetEverAdded)
       .apply()
   }
 
@@ -235,5 +282,8 @@ class UserPreferencesRepository(private val context: Context) {
     private const val SYNC_CHECKLIST_SHOWN = "timer_permission_checklist_shown"
     private const val SYNC_POMO_FOCUS = "pomodoro_focus_minutes"
     private const val SYNC_POMO_BREAK = "pomodoro_break_minutes"
+    private const val SYNC_WIDGET_PROMPT_SHOWN_COUNT = "widget_prompt_shown_count"
+    private const val SYNC_WIDGET_LAST_PROMPT_TIME = "widget_last_prompt_time"
+    private const val SYNC_WIDGET_EVER_ADDED = "widget_ever_added"
   }
 }

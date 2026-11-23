@@ -51,6 +51,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -65,33 +66,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.ui.theme.AmbientShadow
-import com.example.ui.theme.AppBackground
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.ErrorRed
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.ProgressTrack
-import com.example.ui.theme.RingGradientBottom
-import com.example.ui.theme.RingGradientMid
-import com.example.ui.theme.RingGradientTop
-import com.example.ui.theme.SoftLavenderBorder
-import com.example.ui.theme.SoftLavenderCardEnd
-import com.example.ui.theme.SoftLavenderCardStart
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VibrantGreen
-import com.example.ui.theme.VioletGradientBottom
-import com.example.ui.theme.VioletGradientTop
+import com.example.ui.theme.AccentColorOption
+import com.example.ui.theme.AppTheme
 import com.example.ui.viewmodel.HomeUiState
 import com.example.ui.viewmodel.LiveStudyingUiState
 import kotlinx.coroutines.flow.StateFlow
-
-private val HomeTimerCardGradient =
-  Brush.horizontalGradient(colors = listOf(SoftLavenderCardStart, SoftLavenderCardEnd))
-private val HomeTimerPlayGradient =
-  Brush.verticalGradient(colors = listOf(VioletGradientTop, VioletGradientBottom))
 
 @Composable
 fun HomeScreen(
@@ -104,6 +83,7 @@ fun HomeScreen(
   onContinueBookClick: (Long) -> Unit,
   onAddBookClick: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val targetFraction =
     if (state.totalChapters == 0) 0f
     else state.completedChapters.toFloat() / state.totalChapters.toFloat()
@@ -118,15 +98,44 @@ fun HomeScreen(
   val showBellDot = state.preferences.reminderEnabled && remainingToday > 0
 
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground),
+    modifier = Modifier.fillMaxSize().background(colors.screenBackground),
     contentAlignment = Alignment.TopCenter,
   ) {
-    Image(
-      painter = painterResource(id = R.drawable.bg_home_waves),
-      contentDescription = null,
-      contentScale = ContentScale.Crop,
-      modifier = Modifier.fillMaxSize(),
-    )
+    if (!colors.isAmoled && !colors.isGlass) {
+      if (!colors.dynamicColorEnabled && colors.accentColor == AccentColorOption.INDIGO) {
+        Image(
+          painter = painterResource(id = R.drawable.bg_home_waves),
+          contentDescription = null,
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxSize(),
+        )
+      } else {
+        val waveTint = colors.tint
+        val waveSoftEnd = colors.softAccentCardEnd.copy(alpha = 0.55f)
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val w = size.width
+          val h = size.height
+          val topWave =
+            Path().apply {
+              moveTo(0f, h * 0.22f)
+              cubicTo(w * 0.28f, h * 0.14f, w * 0.68f, h * 0.30f, w, h * 0.18f)
+              lineTo(w, 0f)
+              lineTo(0f, 0f)
+              close()
+            }
+          drawPath(path = topWave, color = waveTint)
+          val bottomWave =
+            Path().apply {
+              moveTo(0f, h * 0.36f)
+              cubicTo(w * 0.35f, h * 0.26f, w * 0.72f, h * 0.42f, w, h * 0.30f)
+              lineTo(w, h)
+              lineTo(0f, h)
+              close()
+            }
+          drawPath(path = bottomWave, color = waveSoftEnd)
+        }
+      }
+    }
     Column(
       modifier =
         Modifier.widthIn(max = 600.dp)
@@ -151,13 +160,13 @@ fun HomeScreen(
             lineHeight = 35.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = (-0.6).sp,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
           Spacer(modifier = Modifier.height(6.dp))
           Text(
             text = stringResource(R.string.home_subtitle),
             fontSize = 14.sp,
-            color = TextSecondary,
+            color = colors.textSecondary,
           )
         }
 
@@ -169,7 +178,7 @@ fun HomeScreen(
             Icon(
               imageVector = Icons.Outlined.Notifications,
               contentDescription = "Reminder settings",
-              tint = TextPrimary,
+              tint = colors.textPrimary,
               modifier = Modifier.size(26.dp),
             )
             if (showBellDot) {
@@ -178,7 +187,7 @@ fun HomeScreen(
                   Modifier.offset(x = 1.dp, y = (-1).dp)
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(ErrorRed)
+                    .background(colors.error)
               )
             }
           }
@@ -198,7 +207,7 @@ fun HomeScreen(
           Canvas(modifier = Modifier.fillMaxSize()) {
             val strokeWidth = 15.dp.toPx()
             drawArc(
-              color = ProgressTrack,
+              color = colors.progressTrack,
               startAngle = 0f,
               sweepAngle = 360f,
               useCenter = false,
@@ -208,7 +217,7 @@ fun HomeScreen(
               drawArc(
                 brush =
                   Brush.linearGradient(
-                    colors = listOf(RingGradientTop, RingGradientMid, RingGradientBottom),
+                    colors = listOf(colors.ringGradientTop, colors.ringGradientMid, colors.ringGradientBottom),
                     start = Offset(size.width * 0.5f, 0f),
                     end = Offset(size.width * 0.5f, size.height),
                   ),
@@ -225,12 +234,12 @@ fun HomeScreen(
               fontSize = 42.sp,
               fontWeight = FontWeight.Bold,
               letterSpacing = (-1).sp,
-              color = TextPrimary,
+              color = colors.textPrimary,
             )
             Text(
               text = stringResource(R.string.completed_label),
               fontSize = 14.sp,
-              color = TextSecondary,
+              color = colors.textSecondary,
             )
           }
         }
@@ -241,16 +250,16 @@ fun HomeScreen(
       val cardShape = RoundedCornerShape(20.dp)
       Surface(
         shape = cardShape,
-        color = CardSurface,
-        border = BorderStroke(1.dp, HairlineBorder),
+        color = colors.surface,
+        border = BorderStroke(1.dp, colors.border),
         modifier =
           Modifier.fillMaxWidth()
             .shadow(
-              elevation = 10.dp,
+              elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
               shape = cardShape,
               clip = false,
-              ambientColor = AmbientShadow,
-              spotColor = AmbientShadow,
+              ambientColor = colors.ambientShadow,
+              spotColor = colors.ambientShadow,
             ),
       ) {
         Row(
@@ -259,7 +268,7 @@ fun HomeScreen(
         ) {
           HomeStatColumn(
             icon = Icons.AutoMirrored.Outlined.MenuBook,
-            iconTint = PrimaryIndigo,
+            iconTint = colors.primary,
             value = state.totalBooks.toString(),
             label = stringResource(R.string.books_label),
             modifier = Modifier.weight(1f),
@@ -267,11 +276,11 @@ fun HomeScreen(
           VerticalDivider(
             modifier = Modifier.height(44.dp),
             thickness = 1.dp,
-            color = HairlineBorder,
+            color = colors.border,
           )
           HomeStatColumn(
             icon = Icons.Outlined.Layers,
-            iconTint = PrimaryIndigo,
+            iconTint = colors.primary,
             value = state.totalChapters.toString(),
             label = stringResource(R.string.chapters_label),
             modifier = Modifier.weight(1f),
@@ -279,11 +288,11 @@ fun HomeScreen(
           VerticalDivider(
             modifier = Modifier.height(44.dp),
             thickness = 1.dp,
-            color = HairlineBorder,
+            color = colors.border,
           )
           HomeStatColumn(
             icon = Icons.Outlined.CheckCircle,
-            iconTint = VibrantGreen,
+            iconTint = colors.vibrantSuccess,
             value = state.completedChapters.toString(),
             label = stringResource(R.string.completed_label),
             modifier = Modifier.weight(1f),
@@ -314,16 +323,16 @@ fun HomeScreen(
       Surface(
         onClick = onTodaysPlanClick,
         shape = cardShape,
-        color = CardSurface,
-        border = BorderStroke(1.dp, HairlineBorder),
+        color = colors.surface,
+        border = BorderStroke(1.dp, colors.border),
         modifier =
           Modifier.fillMaxWidth()
             .shadow(
-              elevation = 8.dp,
+              elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
               shape = cardShape,
               clip = false,
-              ambientColor = AmbientShadow,
-              spotColor = AmbientShadow,
+              ambientColor = colors.ambientShadow,
+              spotColor = colors.ambientShadow,
             )
             .testTag("todays_plan_card"),
       ) {
@@ -335,13 +344,13 @@ fun HomeScreen(
             modifier =
               Modifier.size(44.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(LightIndigoTint),
+                .background(colors.tint),
             contentAlignment = Alignment.Center,
           ) {
             Icon(
               imageVector = Icons.Outlined.CalendarToday,
               contentDescription = null,
-              tint = PrimaryIndigo,
+              tint = colors.primary,
               modifier = Modifier.size(22.dp),
             )
           }
@@ -351,19 +360,19 @@ fun HomeScreen(
               text = stringResource(R.string.todays_plan),
               fontSize = 16.sp,
               fontWeight = FontWeight.Bold,
-              color = TextPrimary,
+              color = colors.textPrimary,
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
               text = planSubtitle,
               fontSize = 13.sp,
-              color = TextSecondary,
+              color = colors.textSecondary,
             )
           }
           Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             contentDescription = "Edit daily goal",
-            tint = TextSecondary,
+            tint = colors.textSecondary,
           )
         }
       }
@@ -374,7 +383,7 @@ fun HomeScreen(
         text = stringResource(R.string.continue_studying),
         fontSize = 18.sp,
         fontWeight = FontWeight.Bold,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
 
       Spacer(modifier = Modifier.height(10.dp))
@@ -393,16 +402,16 @@ fun HomeScreen(
         Surface(
           onClick = { onContinueBookClick(continueBook.book.id) },
           shape = cardShape,
-          color = CardSurface,
-          border = BorderStroke(1.dp, HairlineBorder),
+          color = colors.surface,
+          border = BorderStroke(1.dp, colors.border),
           modifier =
             Modifier.fillMaxWidth()
               .shadow(
-                elevation = 8.dp,
+                elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
                 shape = cardShape,
                 clip = false,
-                ambientColor = AmbientShadow,
-                spotColor = AmbientShadow,
+                ambientColor = colors.ambientShadow,
+                spotColor = colors.ambientShadow,
               )
               .testTag("continue_studying_card"),
         ) {
@@ -414,13 +423,13 @@ fun HomeScreen(
               modifier =
                 Modifier.size(44.dp)
                   .clip(RoundedCornerShape(14.dp))
-                  .background(LightIndigoTint),
+                  .background(colors.tint),
               contentAlignment = Alignment.Center,
             ) {
               Icon(
                 imageVector = Icons.AutoMirrored.Outlined.MenuBook,
                 contentDescription = null,
-                tint = PrimaryIndigo,
+                tint = colors.primary,
                 modifier = Modifier.size(22.dp),
               )
             }
@@ -430,7 +439,7 @@ fun HomeScreen(
                 text = continueBook.book.name,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary,
+                color = colors.textPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -438,20 +447,20 @@ fun HomeScreen(
               Text(
                 text = subtitleText,
                 fontSize = 13.sp,
-                color = TextSecondary,
+                color = colors.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
             }
             Spacer(modifier = Modifier.width(8.dp))
             Box(
-              modifier = Modifier.size(36.dp).clip(CircleShape).background(LightIndigoTint),
+              modifier = Modifier.size(36.dp).clip(CircleShape).background(colors.tint),
               contentAlignment = Alignment.Center,
             ) {
               Icon(
                 imageVector = Icons.Default.PlayArrow,
                 contentDescription = "Open book",
-                tint = PrimaryIndigo,
+                tint = colors.primary,
                 modifier = Modifier.size(20.dp),
               )
             }
@@ -460,16 +469,16 @@ fun HomeScreen(
       } else {
         Surface(
           shape = cardShape,
-          color = CardSurface,
-          border = BorderStroke(1.dp, HairlineBorder),
+          color = colors.surface,
+          border = BorderStroke(1.dp, colors.border),
           modifier =
             Modifier.fillMaxWidth()
               .shadow(
-                elevation = 8.dp,
+                elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
                 shape = cardShape,
                 clip = false,
-                ambientColor = AmbientShadow,
-                spotColor = AmbientShadow,
+                ambientColor = colors.ambientShadow,
+                spotColor = colors.ambientShadow,
               ),
         ) {
           Row(
@@ -482,13 +491,13 @@ fun HomeScreen(
                 text = "Start your syllabus",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary,
+                color = colors.textPrimary,
               )
               Spacer(modifier = Modifier.height(2.dp))
               Text(
                 text = "Add your first book to begin tracking.",
                 fontSize = 13.sp,
-                color = TextSecondary,
+                color = colors.textSecondary,
               )
             }
             Spacer(modifier = Modifier.width(12.dp))
@@ -497,8 +506,8 @@ fun HomeScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.buttonColors(
-                  containerColor = LightIndigoTint,
-                  contentColor = PrimaryIndigo,
+                  containerColor = colors.tint,
+                  contentColor = colors.primary,
                 ),
               elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp),
               modifier = Modifier.testTag("home_empty_add_book"),
@@ -520,6 +529,7 @@ private fun HomeStudyTimerCard(
   cardShape: Shape,
   onClick: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val liveStudying by liveStudyingState.collectAsStateWithLifecycle()
   val activeMeta = liveStudying.activeMeta
   val timerCardTitle =
@@ -536,26 +546,31 @@ private fun HomeStudyTimerCard(
       "Track your reading time"
     }
 
+  val cardGradient =
+    Brush.horizontalGradient(colors = listOf(colors.softAccentCardStart, colors.softAccentCardEnd))
+  val playGradient =
+    Brush.verticalGradient(colors = listOf(colors.primaryGradientTop, colors.primaryGradientBottom))
+
   Surface(
     onClick = onClick,
     shape = cardShape,
     color = Color.Transparent,
-    border = BorderStroke(1.dp, SoftLavenderBorder),
+    border = BorderStroke(1.dp, colors.softAccentBorder),
     modifier =
       Modifier.fillMaxWidth()
         .shadow(
-          elevation = 8.dp,
+          elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
           shape = cardShape,
           clip = false,
-          ambientColor = AmbientShadow,
-          spotColor = AmbientShadow,
+          ambientColor = colors.ambientShadow,
+          spotColor = colors.ambientShadow,
         )
         .testTag("home_study_timer_card"),
   ) {
     Row(
       modifier =
         Modifier.fillMaxWidth()
-          .background(HomeTimerCardGradient)
+          .background(cardGradient)
           .padding(horizontal = 16.dp, vertical = 14.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -563,13 +578,13 @@ private fun HomeStudyTimerCard(
         modifier =
           Modifier.size(44.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = 0.85f)),
+            .background(if (colors.isAmoled) colors.timerIconBadge else colors.surface.copy(alpha = 0.85f)),
         contentAlignment = Alignment.Center,
       ) {
         Icon(
           imageVector = Icons.Outlined.Timer,
           contentDescription = null,
-          tint = PrimaryIndigo,
+          tint = colors.primary,
           modifier = Modifier.size(24.dp),
         )
       }
@@ -579,7 +594,7 @@ private fun HomeStudyTimerCard(
           text = timerCardTitle,
           fontSize = 16.sp,
           fontWeight = FontWeight.Bold,
-          color = TextPrimary,
+          color = colors.textPrimary,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
@@ -587,7 +602,7 @@ private fun HomeStudyTimerCard(
         Text(
           text = timerCardSubtitle,
           fontSize = 13.sp,
-          color = TextSecondary,
+          color = colors.textSecondary,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
@@ -597,14 +612,14 @@ private fun HomeStudyTimerCard(
         modifier =
           Modifier.size(40.dp)
             .clip(CircleShape)
-            .background(HomeTimerPlayGradient),
+            .background(playGradient),
         contentAlignment = Alignment.Center,
       ) {
         Icon(
           imageVector = Icons.Default.PlayArrow,
           contentDescription =
             if (liveStudying.isRunningOrPaused) "Open running timer" else "Open study timer",
-          tint = Color.White,
+          tint = colors.onPrimary,
           modifier = Modifier.size(22.dp),
         )
       }
@@ -620,6 +635,7 @@ private fun HomeStatColumn(
   label: String,
   modifier: Modifier = Modifier,
 ) {
+  val colors = AppTheme.colors
   Column(
     modifier = modifier,
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -635,13 +651,13 @@ private fun HomeStatColumn(
       text = value,
       fontSize = 20.sp,
       fontWeight = FontWeight.Bold,
-      color = TextPrimary,
+      color = colors.textPrimary,
     )
     Spacer(modifier = Modifier.height(2.dp))
     Text(
       text = label,
       fontSize = 12.sp,
-      color = TextSecondary,
+      color = colors.textSecondary,
     )
   }
 }

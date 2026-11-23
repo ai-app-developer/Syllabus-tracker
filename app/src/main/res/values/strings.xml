@@ -52,4 +52,20 @@
     <string name="widget_done_ring_desc">Compact circular ring displaying overall syllabus completion percentage.</string>
     <string name="widget_continue_studying_name">Continue Studying</string>
     <string name="widget_continue_studying_desc">Displays your active book, next incomplete chapter, and progress.</string>
+    <string name="widget_prompt_headline">Your progress, one glance away</string>
+    <string name="widget_prompt_body">Add a widget to your home screen and see your syllabus without opening the app.</string>
+    <string name="widget_prompt_add_action">Add widget</string>
+    <string name="widget_prompt_not_now">Not now</string>
+    <string name="widget_added_snackbar">Widget added</string>
+    <string name="widget_fallback_title">Add from your home screen</string>
+    <string name="widget_fallback_step_1">1. Long-press an empty area of your home screen</string>
+    <string name="widget_fallback_step_2">2. Tap Widgets</string>
+    <string name="widget_fallback_step_3">3. Drag Syllabus Tracker onto the screen</string>
+    <string name="widget_fallback_got_it">Got it</string>
+    <string name="more_widgets_section">Home Screen</string>
+    <string name="more_home_widgets_title">Home screen widgets</string>
+    <string name="more_home_widgets_subtitle">Add syllabus widgets for a quick glance</string>
+    <string name="home_widgets_screen_title">Home screen widgets</string>
+    <string name="widget_add_button">Add</string>
+    <string name="widget_added_count_badge">Added \u00d7%1$d</string>
 </resources>

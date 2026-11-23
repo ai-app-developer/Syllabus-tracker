@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Vibration
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -103,6 +104,7 @@ fun MoreScreen(
   isTimerRunning: Boolean,
   onOpenStudyTimer: () -> Unit,
   onOpenReadingHistory: () -> Unit,
+  onOpenHomeWidgets: () -> Unit = {},
   onEditDailyGoal: () -> Unit,
   onToggleReminder: (Boolean) -> Unit,
   onEditReminderTime: () -> Unit,
@@ -351,6 +353,62 @@ fun MoreScreen(
           Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             contentDescription = "Edit daily goal",
+            tint = TextSecondary,
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.height(20.dp))
+
+      Text(
+        text = stringResource(R.string.more_widgets_section),
+        style = MaterialTheme.typography.labelLarge,
+        color = TextSecondary,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+
+      Surface(
+        onClick = onOpenHomeWidgets,
+        shape = RoundedCornerShape(16.dp),
+        color = CardSurface,
+        border = BorderStroke(1.dp, HairlineBorder),
+        shadowElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth().testTag("more_home_widgets_row"),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(16.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Box(
+            modifier =
+              Modifier.size(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(LightIndigoTint),
+            contentAlignment = Alignment.Center,
+          ) {
+            Icon(
+              imageVector = Icons.Outlined.Widgets,
+              contentDescription = null,
+              tint = PrimaryIndigo,
+              modifier = Modifier.size(20.dp),
+            )
+          }
+          Spacer(modifier = Modifier.width(14.dp))
+          Column(modifier = Modifier.weight(1f)) {
+            Text(
+              text = stringResource(R.string.more_home_widgets_title),
+              style = MaterialTheme.typography.titleMedium,
+              color = TextPrimary,
+            )
+            Text(
+              text = stringResource(R.string.more_home_widgets_subtitle),
+              style = MaterialTheme.typography.bodyMedium,
+              color = TextSecondary,
+            )
+          }
+          Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = stringResource(R.string.more_home_widgets_title),
             tint = TextSecondary,
           )
         }

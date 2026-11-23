@@ -76,32 +76,9 @@ import com.example.timer.SessionEventType
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
 import com.example.ui.components.StopSessionSummaryDialog
-import com.example.ui.theme.AmbientShadow
-import com.example.ui.theme.AppBackground
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightGreenBorder
-import com.example.ui.theme.LightGreenTint
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.ProgressTrack
-import com.example.ui.theme.RingGradientBottom
-import com.example.ui.theme.RingGradientMid
-import com.example.ui.theme.RingGradientTop
-import com.example.ui.theme.SoftOrangeTint
-import com.example.ui.theme.StreakOrange
-import com.example.ui.theme.SuccessGreen
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VibrantGreen
-import com.example.ui.theme.VioletGradientBottom
-import com.example.ui.theme.VioletGradientTop
+import com.example.ui.theme.AppTheme
 import com.example.ui.viewmodel.LiveStudyingUiState
 import kotlinx.coroutines.flow.StateFlow
-
-private val WarmAmberText = Color(0xFFD97706)
-private val StudyingStopGradient =
-  Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
 
 @Composable
 fun StudyingScreen(
@@ -119,35 +96,40 @@ fun StudyingScreen(
 ) {
   BackHandler { onMinimizeBack() }
 
+  val colors = AppTheme.colors
   val liveState by liveStudyingState.collectAsStateWithLifecycle()
   var menuExpanded by remember { mutableStateOf(false) }
   val activeMeta = liveState.activeMeta
 
   if (activeMeta == null) {
     Box(
-      modifier = Modifier.fillMaxSize().background(AppBackground).padding(innerPadding),
+      modifier = Modifier.fillMaxSize().background(colors.screenBackground).padding(innerPadding),
       contentAlignment = Alignment.Center,
     ) {
       Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
         Text(
           text = "No Active Session",
           style = MaterialTheme.typography.titleLarge,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
           text = "Start a study session from Study Timer setup.",
           style = MaterialTheme.typography.bodyMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
           textAlign = TextAlign.Center,
         )
         Spacer(modifier = Modifier.height(16.dp))
         Button(
           onClick = onMinimizeBack,
           shape = RoundedCornerShape(24.dp),
-          colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = colors.primarySolid,
+              contentColor = colors.onPrimary,
+            ),
         ) {
-          Text("Go Back", color = Color.White)
+          Text("Go Back")
         }
       }
     }
@@ -165,21 +147,21 @@ fun StudyingScreen(
   val isBreak = liveState.isBreak
   val statusBgColor =
     when {
-      isPaused -> SoftOrangeTint
-      isBreak -> LightIndigoTint
-      else -> LightGreenTint
+      isPaused -> colors.warningTint
+      isBreak -> colors.tint
+      else -> colors.successTint
     }
   val statusDotColor =
     when {
-      isPaused -> WarmAmberText
-      isBreak -> PrimaryIndigo
-      else -> VibrantGreen
+      isPaused -> colors.warningText
+      isBreak -> colors.primary
+      else -> colors.vibrantSuccess
     }
   val statusTextColor =
     when {
-      isPaused -> WarmAmberText
-      isBreak -> PrimaryIndigo
-      else -> SuccessGreen
+      isPaused -> colors.warningText
+      isBreak -> colors.primary
+      else -> colors.success
     }
   val statusLabel =
     when {
@@ -188,9 +170,11 @@ fun StudyingScreen(
       activeMeta.state.mode == TimerMode.POMODORO -> "Focus • Cycle ${activeMeta.state.pomodoroCycle}"
       else -> "Studying..."
     }
+  val stopGradient =
+    Brush.verticalGradient(listOf(colors.primaryGradientTop, colors.primaryGradientBottom))
 
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground),
+    modifier = Modifier.fillMaxSize().background(colors.screenBackground),
     contentAlignment = Alignment.TopCenter,
   ) {
     Column(
@@ -217,7 +201,7 @@ fun StudyingScreen(
           Icon(
             imageVector = Icons.Default.KeyboardArrowDown,
             contentDescription = "Minimize timer",
-            tint = TextPrimary,
+            tint = colors.textPrimary,
             modifier = Modifier.size(28.dp),
           )
         }
@@ -226,7 +210,7 @@ fun StudyingScreen(
             text = stringResource(R.string.studying_title),
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
         }
         Box {
@@ -237,16 +221,16 @@ fun StudyingScreen(
             Icon(
               imageVector = Icons.Default.MoreVert,
               contentDescription = "More options",
-              tint = TextPrimary,
+              tint = colors.textPrimary,
             )
           }
           DropdownMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
-            containerColor = CardSurface,
+            containerColor = colors.dialogSurface,
           ) {
             DropdownMenuItem(
-              text = { Text("Reading History", color = TextPrimary) },
+              text = { Text("Reading History", color = colors.textPrimary) },
               onClick = {
                 menuExpanded = false
                 onOpenHistory()
@@ -254,7 +238,7 @@ fun StudyingScreen(
             )
             if (isBreak) {
               DropdownMenuItem(
-                text = { Text("Skip Break", color = TextPrimary) },
+                text = { Text("Skip Break", color = colors.textPrimary) },
                 onClick = {
                   menuExpanded = false
                   onSkipBreak()
@@ -276,14 +260,14 @@ fun StudyingScreen(
           modifier =
             Modifier.size(230.dp)
               .shadow(
-                elevation = 10.dp,
+                elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
                 shape = CircleShape,
                 clip = false,
-                ambientColor = AmbientShadow,
-                spotColor = AmbientShadow,
+                ambientColor = colors.ambientShadow,
+                spotColor = colors.ambientShadow,
               )
               .clip(CircleShape)
-              .background(CardSurface),
+              .background(colors.surface),
         ) {
           Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
@@ -296,7 +280,7 @@ fun StudyingScreen(
                 lineTo(0f, h)
                 close()
               }
-            drawPath(path = backWave, color = Color(0xFFF1EEFE))
+            drawPath(path = backWave, color = colors.dialWaveBack)
 
             val frontWave =
               Path().apply {
@@ -306,7 +290,7 @@ fun StudyingScreen(
                 lineTo(0f, h)
                 close()
               }
-            drawPath(path = frontWave, color = Color(0xFFE3DCFE))
+            drawPath(path = frontWave, color = colors.dialWaveFront)
           }
         }
 
@@ -314,7 +298,7 @@ fun StudyingScreen(
         Canvas(modifier = Modifier.fillMaxSize()) {
           val strokeWidth = 11.dp.toPx()
           drawArc(
-            color = ProgressTrack,
+            color = colors.progressTrack,
             startAngle = 0f,
             sweepAngle = 360f,
             useCenter = false,
@@ -324,7 +308,7 @@ fun StudyingScreen(
             drawArc(
               brush =
                 Brush.linearGradient(
-                  colors = listOf(RingGradientTop, RingGradientMid, RingGradientBottom),
+                  colors = listOf(colors.ringGradientTop, colors.ringGradientMid, colors.ringGradientBottom),
                   start = Offset(size.width * 0.5f, 0f),
                   end = Offset(size.width * 0.5f, size.height),
                 ),
@@ -343,7 +327,7 @@ fun StudyingScreen(
           Icon(
             imageVector = Icons.AutoMirrored.Outlined.MenuBook,
             contentDescription = null,
-            tint = PrimaryIndigo,
+            tint = colors.primary,
             modifier = Modifier.size(22.dp),
           )
           Spacer(modifier = Modifier.height(5.dp))
@@ -351,14 +335,14 @@ fun StudyingScreen(
             text = activeMeta.bookName,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary,
+            color = colors.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
           Text(
             text = activeMeta.chapterLabel,
             fontSize = 12.sp,
-            color = TextSecondary,
+            color = colors.textSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
@@ -367,7 +351,7 @@ fun StudyingScreen(
             text = liveState.primaryClockDisplay,
             fontSize = 38.sp,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary,
+            color = colors.textPrimary,
             letterSpacing = (-0.8).sp,
             style = MaterialTheme.typography.headlineLarge.copy(fontFeatureSettings = "tnum"),
             modifier = Modifier.testTag("studying_clock_text"),
@@ -412,7 +396,7 @@ fun StudyingScreen(
       ) {
         StudyingMetricTile(
           icon = Icons.Outlined.TrackChanges,
-          iconTint = PrimaryIndigo,
+          iconTint = colors.primary,
           label =
             if (activeMeta.state.goalMs == null && activeMeta.state.mode == TimerMode.POMODORO) {
               "Focus Block"
@@ -424,14 +408,14 @@ fun StudyingScreen(
         )
         StudyingMetricTile(
           icon = Icons.AutoMirrored.Outlined.MenuBook,
-          iconTint = PrimaryIndigo,
+          iconTint = colors.primary,
           label = "Elapsed",
           value = TimerMath.formatShortElapsed(liveState.metrics.activeFocusMs),
           modifier = Modifier.weight(1f),
         )
         StudyingMetricTile(
           icon = Icons.Filled.LocalFireDepartment,
-          iconTint = StreakOrange,
+          iconTint = colors.warning,
           label = "Focus",
           value = "${liveState.metrics.focusPercent}%",
           modifier = Modifier.weight(1f),
@@ -449,16 +433,16 @@ fun StudyingScreen(
           Surface(
             onClick = onTogglePauseResume,
             shape = CircleShape,
-            color = CardSurface,
-            border = BorderStroke(1.dp, HairlineBorder),
+            color = colors.surface,
+            border = BorderStroke(1.dp, colors.border),
             modifier =
               Modifier.size(58.dp)
                 .shadow(
-                  elevation = 8.dp,
+                  elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
                   shape = CircleShape,
                   clip = false,
-                  ambientColor = AmbientShadow,
-                  spotColor = AmbientShadow,
+                  ambientColor = colors.ambientShadow,
+                  spotColor = colors.ambientShadow,
                 )
                 .testTag("studying_pause_resume_button"),
           ) {
@@ -466,7 +450,7 @@ fun StudyingScreen(
               Icon(
                 imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                 contentDescription = if (isPaused) "Resume timer" else "Pause timer",
-                tint = TextPrimary,
+                tint = colors.textPrimary,
                 modifier = Modifier.size(24.dp),
               )
             }
@@ -476,7 +460,7 @@ fun StudyingScreen(
             text = if (isPaused) "Resume" else "Pause",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
         }
 
@@ -488,23 +472,23 @@ fun StudyingScreen(
             modifier =
               Modifier.size(74.dp)
                 .shadow(
-                  elevation = 12.dp,
+                  elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 12.dp,
                   shape = CircleShape,
                   clip = false,
-                  ambientColor = AmbientShadow,
-                  spotColor = AmbientShadow,
+                  ambientColor = colors.ambientShadow,
+                  spotColor = colors.ambientShadow,
                 )
                 .testTag("studying_stop_button"),
           ) {
             Box(
               modifier =
-                Modifier.fillMaxSize().background(StudyingStopGradient),
+                Modifier.fillMaxSize().background(stopGradient),
               contentAlignment = Alignment.Center,
             ) {
               Icon(
                 imageVector = Icons.Default.Stop,
                 contentDescription = "Stop session",
-                tint = Color.White,
+                tint = colors.onPrimary,
                 modifier = Modifier.size(30.dp),
               )
             }
@@ -514,7 +498,7 @@ fun StudyingScreen(
             text = "Stop",
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
         }
 
@@ -522,16 +506,16 @@ fun StudyingScreen(
           Surface(
             onClick = onRecordLap,
             shape = CircleShape,
-            color = CardSurface,
-            border = BorderStroke(1.dp, HairlineBorder),
+            color = colors.surface,
+            border = BorderStroke(1.dp, colors.border),
             modifier =
               Modifier.size(58.dp)
                 .shadow(
-                  elevation = 8.dp,
+                  elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
                   shape = CircleShape,
                   clip = false,
-                  ambientColor = AmbientShadow,
-                  spotColor = AmbientShadow,
+                  ambientColor = colors.ambientShadow,
+                  spotColor = colors.ambientShadow,
                 )
                 .testTag("studying_lap_button"),
           ) {
@@ -539,7 +523,7 @@ fun StudyingScreen(
               Icon(
                 imageVector = Icons.Outlined.Flag,
                 contentDescription = "Record lap",
-                tint = TextPrimary,
+                tint = colors.textPrimary,
                 modifier = Modifier.size(22.dp),
               )
             }
@@ -549,7 +533,7 @@ fun StudyingScreen(
             text = "Lap",
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
         }
       }
@@ -559,17 +543,17 @@ fun StudyingScreen(
         OutlinedButton(
           onClick = onSkipBreak,
           shape = RoundedCornerShape(24.dp),
-          border = BorderStroke(1.dp, PrimaryIndigo),
+          border = BorderStroke(1.dp, colors.primary),
           modifier = Modifier.testTag("studying_skip_break_button"),
         ) {
           Icon(
             imageVector = Icons.Default.SkipNext,
             contentDescription = null,
-            tint = PrimaryIndigo,
+            tint = colors.primary,
             modifier = Modifier.size(18.dp),
           )
           Spacer(modifier = Modifier.width(6.dp))
-          Text("Skip Break & Start Focus", color = PrimaryIndigo, fontWeight = FontWeight.SemiBold)
+          Text("Skip Break & Start Focus", color = colors.primary, fontWeight = FontWeight.SemiBold)
         }
       }
 
@@ -577,8 +561,8 @@ fun StudyingScreen(
 
       Surface(
         shape = RoundedCornerShape(18.dp),
-        color = LightGreenTint,
-        border = BorderStroke(1.dp, LightGreenBorder),
+        color = colors.successTint,
+        border = BorderStroke(1.dp, colors.successBorder),
         modifier = Modifier.fillMaxWidth(),
       ) {
         Row(
@@ -588,7 +572,7 @@ fun StudyingScreen(
           Icon(
             imageVector = Icons.Default.CheckCircle,
             contentDescription = null,
-            tint = VibrantGreen,
+            tint = colors.vibrantSuccess,
             modifier = Modifier.size(22.dp),
           )
           Spacer(modifier = Modifier.width(12.dp))
@@ -599,7 +583,7 @@ fun StudyingScreen(
                 else "Timer is running in background",
               fontSize = 14.sp,
               fontWeight = FontWeight.Bold,
-              color = TextPrimary,
+              color = colors.textPrimary,
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -607,7 +591,7 @@ fun StudyingScreen(
                 if (isPaused) "Tap Resume whenever you're ready to continue."
                 else "You can minimize the app, the timer will keep running.",
               fontSize = 12.sp,
-              color = TextSecondary,
+              color = colors.textSecondary,
             )
           }
         }
@@ -625,23 +609,23 @@ fun StudyingScreen(
         val lapsShape = RoundedCornerShape(20.dp)
         Surface(
           shape = lapsShape,
-          color = CardSurface,
-          border = BorderStroke(1.dp, HairlineBorder),
+          color = colors.surface,
+          border = BorderStroke(1.dp, colors.border),
           modifier =
             Modifier.fillMaxWidth()
               .shadow(
-                elevation = 6.dp,
+                elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 6.dp,
                 shape = lapsShape,
                 clip = false,
-                ambientColor = AmbientShadow,
-                spotColor = AmbientShadow,
+                ambientColor = colors.ambientShadow,
+                spotColor = colors.ambientShadow,
               ),
         ) {
           Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
             Text(
               text = "Laps ($totalLapCount)",
               style = MaterialTheme.typography.labelLarge,
-              color = TextSecondary,
+              color = colors.textSecondary,
             )
             Spacer(modifier = Modifier.height(8.dp))
             displayedLaps.forEachIndexed { idx, lap ->
@@ -649,7 +633,7 @@ fun StudyingScreen(
                 if (idx > 0) {
                   HorizontalDivider(
                     thickness = 1.dp,
-                    color = HairlineBorder,
+                    color = colors.border,
                     modifier = Modifier.padding(vertical = 6.dp),
                   )
                 }
@@ -660,13 +644,13 @@ fun StudyingScreen(
                   Text(
                     text = lap.label ?: "Lap",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextPrimary,
+                    color = colors.textPrimary,
                   )
                   Text(
                     text = TimerMath.formatHms(lap.elapsedAtEventMs),
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = PrimaryIndigo,
+                    color = colors.primary,
                   )
                 }
               }
@@ -696,18 +680,19 @@ private fun StudyingMetricTile(
   value: String,
   modifier: Modifier = Modifier,
 ) {
+  val colors = AppTheme.colors
   val tileShape = RoundedCornerShape(20.dp)
   Surface(
     shape = tileShape,
-    color = CardSurface,
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.surface,
+    border = BorderStroke(1.dp, colors.border),
     modifier =
       modifier.shadow(
-        elevation = 8.dp,
+        elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
         shape = tileShape,
         clip = false,
-        ambientColor = AmbientShadow,
-        spotColor = AmbientShadow,
+        ambientColor = colors.ambientShadow,
+        spotColor = colors.ambientShadow,
       ),
   ) {
     Column(
@@ -724,7 +709,7 @@ private fun StudyingMetricTile(
       Text(
         text = label,
         fontSize = 12.sp,
-        color = TextSecondary,
+        color = colors.textSecondary,
         maxLines = 1,
       )
       Spacer(modifier = Modifier.height(2.dp))
@@ -732,7 +717,7 @@ private fun StudyingMetricTile(
         text = value,
         fontSize = 16.sp,
         fontWeight = FontWeight.Bold,
-        color = TextPrimary,
+        color = colors.textPrimary,
         maxLines = 1,
       )
     }

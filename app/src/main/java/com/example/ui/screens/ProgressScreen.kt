@@ -70,31 +70,9 @@ import com.example.timer.AnalyticsPeriod
 import com.example.timer.BookStudySlice
 import com.example.timer.TimerAnalyticsUiState
 import com.example.timer.TimerMath
-import com.example.ui.theme.AmbientShadow
-import com.example.ui.theme.AppBackground
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.ErrorRed
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightGreenTint
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.LightRedTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.ProgressTrack
-import com.example.ui.theme.SecondaryIndigoBar
-import com.example.ui.theme.SoftOrangeTint
-import com.example.ui.theme.StreakOrange
-import com.example.ui.theme.SuccessGreen
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VibrantGreen
-import com.example.ui.theme.VioletGradientBottom
-import com.example.ui.theme.VioletGradientTop
+import com.example.ui.theme.AppTheme
 import com.example.ui.viewmodel.ProgressTab
 import com.example.ui.viewmodel.ProgressUiState
-
-private val EmptyBarBrush = Brush.verticalGradient(listOf(ProgressTrack, ProgressTrack))
-private val HighestBarBrush = Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
-private val NormalBarBrush = Brush.verticalGradient(listOf(Color(0xFFCBC3FE), Color(0xFFD9D3FE)))
 
 @Composable
 fun ProgressScreen(
@@ -107,10 +85,11 @@ fun ProgressScreen(
   onBookClick: (Long) -> Unit,
   onOpenReadingHistory: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val bottomPad = innerPadding.calculateBottomPadding() + 14.dp
 
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground),
+    modifier = Modifier.fillMaxSize().background(colors.screenBackground),
     contentAlignment = Alignment.TopCenter,
   ) {
     Column(
@@ -130,7 +109,7 @@ fun ProgressScreen(
         fontSize = 30.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = (-0.5).sp,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
 
       Spacer(modifier = Modifier.height(14.dp))
@@ -175,16 +154,16 @@ fun ProgressScreen(
             val cardShape = RoundedCornerShape(22.dp)
             Surface(
               shape = cardShape,
-              color = CardSurface,
-              border = BorderStroke(1.dp, HairlineBorder),
+              color = colors.surface,
+              border = BorderStroke(1.dp, colors.border),
               modifier =
                 Modifier.fillMaxWidth()
                   .shadow(
-                    elevation = 10.dp,
+                    elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
                     shape = cardShape,
                     clip = false,
-                    ambientColor = AmbientShadow,
-                    spotColor = AmbientShadow,
+                    ambientColor = colors.ambientShadow,
+                    spotColor = colors.ambientShadow,
                   ),
             ) {
               Column {
@@ -193,13 +172,13 @@ fun ProgressScreen(
                     text = "${state.overallPercentage}%",
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
+                    color = colors.textPrimary,
                   )
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
                     text = stringResource(R.string.syllabus_completed),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary,
+                    color = colors.textSecondary,
                   )
                 }
 
@@ -210,7 +189,7 @@ fun ProgressScreen(
                   modifier = Modifier.fillMaxWidth().height(92.dp),
                 )
 
-                HorizontalDivider(thickness = 1.dp, color = HairlineBorder)
+                HorizontalDivider(thickness = 1.dp, color = colors.border)
 
                 Row(
                   modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp, horizontal = 8.dp),
@@ -218,7 +197,7 @@ fun ProgressScreen(
                 ) {
                   ProgressStatColumn(
                     icon = Icons.Outlined.CheckCircle,
-                    iconTint = VibrantGreen,
+                    iconTint = colors.vibrantSuccess,
                     value = state.completedChapters.toString(),
                     label = stringResource(R.string.completed_label),
                     modifier = Modifier.weight(1f),
@@ -226,11 +205,11 @@ fun ProgressScreen(
                   VerticalDivider(
                     modifier = Modifier.height(44.dp),
                     thickness = 1.dp,
-                    color = HairlineBorder,
+                    color = colors.border,
                   )
                   ProgressStatColumn(
                     icon = Icons.Outlined.AccessTime,
-                    iconTint = TextSecondary,
+                    iconTint = colors.textSecondary,
                     value = state.remainingChapters.toString(),
                     label = stringResource(R.string.remaining_label),
                     modifier = Modifier.weight(1f),
@@ -238,11 +217,11 @@ fun ProgressScreen(
                   VerticalDivider(
                     modifier = Modifier.height(44.dp),
                     thickness = 1.dp,
-                    color = HairlineBorder,
+                    color = colors.border,
                   )
                   ProgressStatColumn(
                     icon = Icons.Outlined.Layers,
-                    iconTint = PrimaryIndigo,
+                    iconTint = colors.primary,
                     value = state.totalChapters.toString(),
                     label = stringResource(R.string.total_label),
                     modifier = Modifier.weight(1f),
@@ -270,7 +249,7 @@ fun ProgressScreen(
               Text(
                 text = "No books added yet.",
                 style = MaterialTheme.typography.titleMedium,
-                color = TextSecondary,
+                color = colors.textSecondary,
               )
             }
           } else {
@@ -331,20 +310,21 @@ private fun ProgressTabPill(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val colors = AppTheme.colors
   val pillShape = RoundedCornerShape(50)
   Surface(
     shape = pillShape,
-    color = if (selected) PrimaryIndigo else CardSurface,
-    border = if (selected) null else BorderStroke(1.dp, HairlineBorder),
+    color = if (selected) colors.primarySolid else colors.surface,
+    border = if (selected) null else BorderStroke(1.dp, colors.border),
     modifier =
       modifier
         .height(40.dp)
         .shadow(
-          elevation = if (selected) 6.dp else 3.dp,
+          elevation = if (colors.isAmoled || colors.isGlass) 0.dp else if (selected) 6.dp else 3.dp,
           shape = pillShape,
           clip = false,
-          ambientColor = AmbientShadow,
-          spotColor = AmbientShadow,
+          ambientColor = colors.ambientShadow,
+          spotColor = colors.ambientShadow,
         )
         .clip(pillShape)
         .clickable(onClick = onClick)
@@ -356,7 +336,7 @@ private fun ProgressTabPill(
     ) {
       Text(
         text = label,
-        color = if (selected) Color.White else TextPrimary,
+        color = if (selected) colors.onPrimary else colors.textPrimary,
         fontSize = 14.sp,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
         maxLines = 1,
@@ -370,22 +350,26 @@ private fun TimerStudyTimeCard(
   analytics: TimerAnalyticsUiState,
   onSelectPeriod: (AnalyticsPeriod) -> Unit,
 ) {
+  val colors = AppTheme.colors
   var periodMenuExpanded by remember { mutableStateOf(false) }
   val cardShape = RoundedCornerShape(22.dp)
   val maxMs = (analytics.bars.maxOfOrNull { it.durationMs } ?: 0L).coerceAtLeast(1L)
+  val emptyBarBrush = Brush.verticalGradient(listOf(colors.progressTrack, colors.progressTrack))
+  val highestBarBrush = Brush.verticalGradient(listOf(colors.primaryGradientTop, colors.primaryGradientBottom))
+  val normalBarBrush = Brush.verticalGradient(listOf(colors.normalBarTop, colors.normalBarBottom))
 
   Surface(
     shape = cardShape,
-    color = CardSurface,
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.surface,
+    border = BorderStroke(1.dp, colors.border),
     modifier =
       Modifier.fillMaxWidth()
         .shadow(
-          elevation = 10.dp,
+          elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
           shape = cardShape,
           clip = false,
-          ambientColor = AmbientShadow,
-          spotColor = AmbientShadow,
+          ambientColor = colors.ambientShadow,
+          spotColor = colors.ambientShadow,
         ),
   ) {
     Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
@@ -398,15 +382,15 @@ private fun TimerStudyTimeCard(
           text = "Study Time",
           fontSize = 16.sp,
           fontWeight = FontWeight.Bold,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
 
         Box {
           Surface(
             onClick = { periodMenuExpanded = true },
             shape = RoundedCornerShape(50),
-            color = AppBackground,
-            border = BorderStroke(1.dp, HairlineBorder),
+            color = colors.surfaceVariant,
+            border = BorderStroke(1.dp, colors.border),
             modifier = Modifier.testTag("timer_period_dropdown"),
           ) {
             Row(
@@ -417,13 +401,13 @@ private fun TimerStudyTimeCard(
                 text = analytics.period.label,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
-                color = TextPrimary,
+                color = colors.textPrimary,
               )
               Spacer(modifier = Modifier.width(4.dp))
               Icon(
                 imageVector = Icons.Default.KeyboardArrowDown,
                 contentDescription = "Select period",
-                tint = TextSecondary,
+                tint = colors.textSecondary,
                 modifier = Modifier.size(16.dp),
               )
             }
@@ -432,14 +416,14 @@ private fun TimerStudyTimeCard(
           DropdownMenu(
             expanded = periodMenuExpanded,
             onDismissRequest = { periodMenuExpanded = false },
-            containerColor = CardSurface,
+            containerColor = colors.dialogSurface,
           ) {
             AnalyticsPeriod.entries.forEach { period ->
               DropdownMenuItem(
                 text = {
                   Text(
                     text = period.label,
-                    color = if (analytics.period == period) PrimaryIndigo else TextPrimary,
+                    color = if (analytics.period == period) colors.primary else colors.textPrimary,
                     fontWeight =
                       if (analytics.period == period) FontWeight.SemiBold else FontWeight.Normal,
                   )
@@ -461,7 +445,7 @@ private fun TimerStudyTimeCard(
         fontSize = 32.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = (-0.8).sp,
-        color = TextPrimary,
+        color = colors.textPrimary,
         modifier = Modifier.testTag("timer_period_total_text"),
       )
 
@@ -473,13 +457,13 @@ private fun TimerStudyTimeCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
           Surface(
             shape = RoundedCornerShape(8.dp),
-            color = if (isPositive) LightGreenTint else LightRedTint,
+            color = if (isPositive) colors.successTint else colors.errorTint,
           ) {
             Text(
               text = if (isPositive) "↑ +$delta%" else "↓ $delta%",
               fontSize = 12.sp,
               fontWeight = FontWeight.SemiBold,
-              color = if (isPositive) SuccessGreen else ErrorRed,
+              color = if (isPositive) colors.success else colors.error,
               modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
             )
           }
@@ -487,7 +471,7 @@ private fun TimerStudyTimeCard(
           Text(
             text = analytics.period.comparisonLabel,
             fontSize = 13.sp,
-            color = TextSecondary,
+            color = colors.textSecondary,
           )
         }
       } else {
@@ -499,7 +483,7 @@ private fun TimerStudyTimeCard(
               "First tracked ${analytics.period.label.lowercase()}"
             },
           fontSize = 13.sp,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       }
 
@@ -533,9 +517,9 @@ private fun TimerStudyTimeCard(
                     .clip(barShape)
                     .background(
                       when {
-                        !hasData -> EmptyBarBrush
-                        bucket.isHighest -> HighestBarBrush
-                        else -> NormalBarBrush
+                        !hasData -> emptyBarBrush
+                        bucket.isHighest -> highestBarBrush
+                        else -> normalBarBrush
                       }
                     ),
               )
@@ -543,14 +527,14 @@ private fun TimerStudyTimeCard(
               Text(
                 text = bucket.label,
                 fontSize = 11.sp,
-                color = TextSecondary,
+                color = colors.textSecondary,
                 maxLines = 1,
               )
               Text(
                 text = bucket.valueLabel,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary,
+                color = colors.textPrimary,
                 maxLines = 1,
               )
             }
@@ -566,19 +550,20 @@ private fun BookWiseStudyTimeCard(
   totalPeriodMs: Long,
   slices: List<BookStudySlice>,
 ) {
+  val colors = AppTheme.colors
   val cardShape = RoundedCornerShape(22.dp)
   Surface(
     shape = cardShape,
-    color = CardSurface,
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.surface,
+    border = BorderStroke(1.dp, colors.border),
     modifier =
       Modifier.fillMaxWidth()
         .shadow(
-          elevation = 10.dp,
+          elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
           shape = cardShape,
           clip = false,
-          ambientColor = AmbientShadow,
-          spotColor = AmbientShadow,
+          ambientColor = colors.ambientShadow,
+          spotColor = colors.ambientShadow,
         ),
   ) {
     Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
@@ -586,7 +571,7 @@ private fun BookWiseStudyTimeCard(
         text = "Book-wise Study Time",
         fontSize = 16.sp,
         fontWeight = FontWeight.Bold,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
 
       Spacer(modifier = Modifier.height(16.dp))
@@ -602,7 +587,7 @@ private fun BookWiseStudyTimeCard(
           ) {
             Canvas(modifier = Modifier.fillMaxSize().padding(10.dp)) {
               drawArc(
-                color = ProgressTrack,
+                color = colors.progressTrack,
                 startAngle = 0f,
                 sweepAngle = 360f,
                 useCenter = false,
@@ -613,7 +598,7 @@ private fun BookWiseStudyTimeCard(
               text = "No study\ntime yet",
               fontSize = 12.sp,
               fontWeight = FontWeight.Medium,
-              color = TextSecondary,
+              color = colors.textSecondary,
               textAlign = TextAlign.Center,
               lineHeight = 15.sp,
             )
@@ -622,7 +607,7 @@ private fun BookWiseStudyTimeCard(
           Text(
             text = "Complete a study timer session to see your reading time split across books.",
             fontSize = 13.sp,
-            color = TextSecondary,
+            color = colors.textSecondary,
             modifier = Modifier.weight(1f),
           )
         }
@@ -643,9 +628,15 @@ private fun BookWiseStudyTimeCard(
               val sumMs = slices.sumOf { it.totalMs }.coerceAtLeast(1L).toFloat()
 
               slices.forEach { slice ->
+                val sliceColor =
+                  if (slice.bookId == null) {
+                    colors.donutOtherColor
+                  } else {
+                    colors.donutColors[slice.colorIndex.mod(colors.donutColors.size)]
+                  }
                 val sweep = (slice.totalMs.toFloat() / sumMs) * totalSweepAvail
                 drawArc(
-                  color = Color(slice.colorHex),
+                  color = sliceColor,
                   startAngle = startAngle,
                   sweepAngle = sweep.coerceAtLeast(1f),
                   useCenter = false,
@@ -658,7 +649,7 @@ private fun BookWiseStudyTimeCard(
               text = TimerMath.formatStackedHoursMinutes(totalPeriodMs),
               fontSize = 16.sp,
               fontWeight = FontWeight.Bold,
-              color = TextPrimary,
+              color = colors.textPrimary,
               textAlign = TextAlign.Center,
               lineHeight = 19.sp,
             )
@@ -672,6 +663,12 @@ private fun BookWiseStudyTimeCard(
           ) {
             slices.forEach { slice ->
               key(slice.bookId ?: -1L, slice.bookName) {
+                val sliceColor =
+                  if (slice.bookId == null) {
+                    colors.donutOtherColor
+                  } else {
+                    colors.donutColors[slice.colorIndex.mod(colors.donutColors.size)]
+                  }
                 Row(
                   modifier = Modifier.fillMaxWidth(),
                   verticalAlignment = Alignment.CenterVertically,
@@ -680,13 +677,13 @@ private fun BookWiseStudyTimeCard(
                     modifier =
                       Modifier.size(9.dp)
                         .clip(CircleShape)
-                        .background(Color(slice.colorHex)),
+                        .background(sliceColor),
                   )
                   Spacer(modifier = Modifier.width(8.dp))
                   Text(
                     text = slice.bookName,
                     fontSize = 13.sp,
-                    color = TextSecondary,
+                    color = colors.textSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
@@ -696,7 +693,7 @@ private fun BookWiseStudyTimeCard(
                     text = TimerMath.formatHoursMinutes(slice.totalMs),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary,
+                    color = colors.textPrimary,
                   )
                 }
               }
@@ -713,20 +710,21 @@ private fun StudyStreakCard(
   streakDays: Int,
   onClick: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val cardShape = RoundedCornerShape(22.dp)
   Surface(
     onClick = onClick,
     shape = cardShape,
-    color = CardSurface,
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.surface,
+    border = BorderStroke(1.dp, colors.border),
     modifier =
       Modifier.fillMaxWidth()
         .shadow(
-          elevation = 10.dp,
+          elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
           shape = cardShape,
           clip = false,
-          ambientColor = AmbientShadow,
-          spotColor = AmbientShadow,
+          ambientColor = colors.ambientShadow,
+          spotColor = colors.ambientShadow,
         )
         .testTag("progress_streak_card"),
   ) {
@@ -738,13 +736,13 @@ private fun StudyStreakCard(
         modifier =
           Modifier.size(52.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(SoftOrangeTint),
+            .background(colors.warningTint),
         contentAlignment = Alignment.Center,
       ) {
         Icon(
           imageVector = Icons.Filled.LocalFireDepartment,
           contentDescription = null,
-          tint = StreakOrange,
+          tint = colors.warning,
           modifier = Modifier.size(30.dp),
         )
       }
@@ -753,24 +751,24 @@ private fun StudyStreakCard(
         Text(
           text = "Study Streak",
           fontSize = 13.sp,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
         Text(
           text = "$streakDays ${if (streakDays == 1) "Day" else "Days"}",
           fontSize = 20.sp,
           fontWeight = FontWeight.Bold,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
         Text(
           text = if (streakDays > 0) "Keep it up!" else "No study time yet — start today!",
           fontSize = 13.sp,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open reading history",
-        tint = TextSecondary,
+        tint = colors.textSecondary,
       )
     }
   }
@@ -781,6 +779,7 @@ private fun FlatCumulativeChart(
   series: List<Float>,
   modifier: Modifier = Modifier,
 ) {
+  val colors = AppTheme.colors
   val points = if (series.size >= 2) series else List(7) { 0f }
 
   Canvas(modifier = modifier) {
@@ -816,10 +815,10 @@ private fun FlatCumulativeChart(
         close()
       }
 
-    drawPath(path = fillPath, color = LightIndigoTint)
+    drawPath(path = fillPath, color = colors.tint)
     drawPath(
       path = linePath,
-      color = PrimaryIndigo,
+      color = colors.primary,
       style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
     )
   }
@@ -833,6 +832,7 @@ private fun ProgressStatColumn(
   label: String,
   modifier: Modifier = Modifier,
 ) {
+  val colors = AppTheme.colors
   Column(
     modifier = modifier,
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -848,13 +848,13 @@ private fun ProgressStatColumn(
       text = value,
       fontSize = 18.sp,
       fontWeight = FontWeight.Bold,
-      color = TextPrimary,
+      color = colors.textPrimary,
     )
     Spacer(modifier = Modifier.height(2.dp))
     Text(
       text = label,
       style = MaterialTheme.typography.labelMedium,
-      color = TextSecondary,
+      color = colors.textSecondary,
     )
   }
 }
@@ -865,22 +865,23 @@ private fun StudyTrendCard(
   period: StudyTrendPeriod,
   onSelectPeriod: (StudyTrendPeriod) -> Unit,
 ) {
+  val colors = AppTheme.colors
   var periodMenuExpanded by remember { mutableStateOf(false) }
   val maxCount = (trend.maxOfOrNull { it.count } ?: 0).coerceAtLeast(1)
   val cardShape = RoundedCornerShape(22.dp)
 
   Surface(
     shape = cardShape,
-    color = CardSurface,
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.surface,
+    border = BorderStroke(1.dp, colors.border),
     modifier =
       Modifier.fillMaxWidth()
         .shadow(
-          elevation = 10.dp,
+          elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
           shape = cardShape,
           clip = false,
-          ambientColor = AmbientShadow,
-          spotColor = AmbientShadow,
+          ambientColor = colors.ambientShadow,
+          spotColor = colors.ambientShadow,
         ),
   ) {
     Column(modifier = Modifier.padding(18.dp)) {
@@ -892,15 +893,15 @@ private fun StudyTrendCard(
         Text(
           text = stringResource(R.string.study_trend),
           style = MaterialTheme.typography.titleLarge,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
 
         Box {
           Surface(
             onClick = { periodMenuExpanded = true },
             shape = RoundedCornerShape(50),
-            color = AppBackground,
-            border = BorderStroke(1.dp, HairlineBorder),
+            color = colors.surfaceVariant,
+            border = BorderStroke(1.dp, colors.border),
             modifier = Modifier.testTag("trend_period_dropdown"),
           ) {
             Row(
@@ -916,13 +917,13 @@ private fun StudyTrendCard(
                   },
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
-                color = TextPrimary,
+                color = colors.textPrimary,
               )
               Spacer(modifier = Modifier.width(4.dp))
               Icon(
                 imageVector = Icons.Default.KeyboardArrowDown,
                 contentDescription = "Select week",
-                tint = TextSecondary,
+                tint = colors.textSecondary,
                 modifier = Modifier.size(16.dp),
               )
             }
@@ -931,17 +932,17 @@ private fun StudyTrendCard(
           DropdownMenu(
             expanded = periodMenuExpanded,
             onDismissRequest = { periodMenuExpanded = false },
-            containerColor = CardSurface,
+            containerColor = colors.dialogSurface,
           ) {
             DropdownMenuItem(
-              text = { Text(stringResource(R.string.this_week), color = TextPrimary) },
+              text = { Text(stringResource(R.string.this_week), color = colors.textPrimary) },
               onClick = {
                 periodMenuExpanded = false
                 onSelectPeriod(StudyTrendPeriod.THIS_WEEK)
               },
             )
             DropdownMenuItem(
-              text = { Text(stringResource(R.string.last_week), color = TextPrimary) },
+              text = { Text(stringResource(R.string.last_week), color = colors.textPrimary) },
               onClick = {
                 periodMenuExpanded = false
                 onSelectPeriod(StudyTrendPeriod.LAST_WEEK)
@@ -962,9 +963,9 @@ private fun StudyTrendCard(
           key(day.date) {
             val barColor =
               when {
-                day.count == 0 -> ProgressTrack
-                day.isToday -> PrimaryIndigo
-                else -> SecondaryIndigoBar
+                day.count == 0 -> colors.progressTrack
+                day.isToday -> colors.primarySolid
+                else -> colors.secondaryBar
               }
             val barHeight =
               if (day.count == 0) 8.dp
@@ -980,7 +981,7 @@ private fun StudyTrendCard(
                   text = day.count.toString(),
                   fontSize = 11.sp,
                   fontWeight = FontWeight.Medium,
-                  color = if (day.isToday) PrimaryIndigo else TextSecondary,
+                  color = if (day.isToday) colors.primary else colors.textSecondary,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
               }
@@ -996,7 +997,7 @@ private fun StudyTrendCard(
                 text = day.dayLabel.take(3),
                 fontSize = 12.sp,
                 fontWeight = if (day.isToday) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (day.isToday) TextPrimary else TextSecondary,
+                color = if (day.isToday) colors.textPrimary else colors.textSecondary,
               )
             }
           }

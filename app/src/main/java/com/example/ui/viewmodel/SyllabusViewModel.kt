@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.R
 import com.example.SyllabusApplication
 import com.example.data.backup.BackupImportMode
 import com.example.data.backup.BackupImportResult
@@ -21,6 +22,10 @@ import com.example.data.repository.StudyTrendPeriod
 import com.example.data.repository.SyllabusRepository
 import com.example.notifications.StudyReminderScheduler
 import com.example.ui.model.StableList
+import com.example.widgets.HomeWidgetType
+import com.example.widgets.WidgetPinManager
+import com.example.widgets.WidgetPinRequestResult
+import com.example.widgets.WidgetPromptScheduler
 import com.example.widgets.WidgetUpdater
 import java.time.Instant
 import java.time.LocalDate
@@ -35,6 +40,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -99,6 +105,14 @@ data class SyllabusDialogsUiState(
   val importResult: BackupImportResult? = null,
   val backupErrorMessage: String? = null,
 )
+
+@Immutable
+sealed interface WidgetPromptSheetState {
+  data object Hidden : WidgetPromptSheetState
+
+  @Immutable
+  data class Visible(val isFallbackManualSteps: Boolean = false) : WidgetPromptSheetState
+}
 
 @Immutable
 data class HomeUiState(
@@ -195,7 +209,34 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
   private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
   val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
 
+  private val _widgetPromptSheet = MutableStateFlow<WidgetPromptSheetState>(WidgetPromptSheetState.Hidden)
+  val widgetPromptSheet: StateFlow<WidgetPromptSheetState> = _widgetPromptSheet.asStateFlow()
+
+  private val _widgetCounts = MutableStateFlow<Map<HomeWidgetType, Int>>(emptyMap())
+  val widgetCounts: StateFlow<Map<HomeWidgetType, Int>> = _widgetCounts.asStateFlow()
+
+  private val _isPinRequestActive = MutableStateFlow(false)
+  val isPinRequestActive: StateFlow<Boolean> = _isPinRequestActive.asStateFlow()
+
+  private val _showMoreWidgetFallbackSheet = MutableStateFlow(false)
+  val showMoreWidgetFallbackSheet: StateFlow<Boolean> = _showMoreWidgetFallbackSheet.asStateFlow()
+
+  private var launchWidgetPromptCheckStarted = false
+  private var promptVisibilityRecordedForOpen = false
+
   val dialogsState: StateFlow<SyllabusDialogsUiState> = dialogsControls
+
+  init {
+    viewModelScope.launch {
+      WidgetPinManager.pinSuccessEvents.collect {
+        _isPinRequestActive.value = false
+        _widgetPromptSheet.value = WidgetPromptSheetState.Hidden
+        _showMoreWidgetFallbackSheet.value = false
+        refreshWidgetCounts()
+        _snackbarMessages.tryEmit(app.getString(R.string.widget_added_snackbar))
+      }
+    }
+  }
 
   val preferencesState: StateFlow<UserPreferences> =
     repository.observePreferences()
@@ -990,5 +1031,105 @@ class SyllabusViewModel(application: Application) : AndroidViewModel(application
         }
       }
     }
+  }
+
+  fun checkWidgetPromptOnAppStart(
+    isTimerActive: Boolean,
+    hasRecoveryPrompt: Boolean,
+    isStartupPermissionPending: Boolean,
+    isCurrentlyOnHome: Boolean,
+    clockNowMs: Long = System.currentTimeMillis(),
+  ) {
+    if (launchWidgetPromptCheckStarted) return
+    launchWidgetPromptCheckStarted = true
+    viewModelScope.launch {
+      val counts = withContext(Dispatchers.IO) { WidgetPinManager.getAllWidgetCounts(app) }
+      _widgetCounts.value = counts
+      val anyPlaced = counts.values.any { it > 0 }
+      if (anyPlaced) {
+        withContext(Dispatchers.IO) { app.preferencesRepository.markWidgetEverAdded() }
+      }
+      val prefs = withContext(Dispatchers.IO) { app.preferencesRepository.getCurrentPreferences() }
+      val dialogs = dialogsControls.value
+      val anyDialogOpen =
+        dialogs.addChapterSheet.isOpen ||
+          dialogs.bookFormDialog.isOpen ||
+          dialogs.deleteConfirm != DeleteConfirmState.None ||
+          dialogs.isDailyGoalDialogOpen ||
+          dialogs.isTimePickerOpen ||
+          dialogs.pendingBackupImport != null ||
+          dialogs.importResult != null ||
+          dialogs.backupErrorMessage != null
+      val isBlocked =
+        isTimerActive ||
+          hasRecoveryPrompt ||
+          anyDialogOpen ||
+          isStartupPermissionPending ||
+          !isCurrentlyOnHome
+      if (
+        WidgetPromptScheduler.shouldShowWidgetPrompt(
+          prefs = prefs,
+          anyWidgetPlaced = anyPlaced,
+          nowMs = clockNowMs,
+          isBlocked = isBlocked,
+        )
+      ) {
+        promptVisibilityRecordedForOpen = false
+        _widgetPromptSheet.value = WidgetPromptSheetState.Visible(isFallbackManualSteps = false)
+      }
+    }
+  }
+
+  fun onWidgetPromptSheetVisible(clockNowMs: Long = System.currentTimeMillis()) {
+    if (!promptVisibilityRecordedForOpen) {
+      promptVisibilityRecordedForOpen = true
+      app.applicationScope.launch(Dispatchers.IO) {
+        app.preferencesRepository.recordWidgetPromptShown(clockNowMs)
+      }
+    }
+  }
+
+  fun dismissWidgetPrompt() {
+    _widgetPromptSheet.value = WidgetPromptSheetState.Hidden
+    _isPinRequestActive.value = false
+  }
+
+  fun requestPinOverviewFromPrompt() {
+    if (_isPinRequestActive.value) return
+    _isPinRequestActive.value = true
+    when (WidgetPinManager.requestPinWidget(app, HomeWidgetType.OVERVIEW)) {
+      WidgetPinRequestResult.UNSUPPORTED_OR_FAILED -> {
+        _isPinRequestActive.value = false
+        _widgetPromptSheet.value = WidgetPromptSheetState.Visible(isFallbackManualSteps = true)
+      }
+      WidgetPinRequestResult.REQUEST_SENT -> Unit
+    }
+  }
+
+  fun refreshWidgetCounts() {
+    _isPinRequestActive.value = false
+    viewModelScope.launch {
+      val counts = withContext(Dispatchers.IO) { WidgetPinManager.getAllWidgetCounts(app) }
+      _widgetCounts.value = counts
+      if (counts.values.any { it > 0 }) {
+        withContext(Dispatchers.IO) { app.preferencesRepository.markWidgetEverAdded() }
+      }
+    }
+  }
+
+  fun requestPinWidgetFromSettings(type: HomeWidgetType) {
+    if (_isPinRequestActive.value) return
+    _isPinRequestActive.value = true
+    when (WidgetPinManager.requestPinWidget(app, type)) {
+      WidgetPinRequestResult.UNSUPPORTED_OR_FAILED -> {
+        _isPinRequestActive.value = false
+        _showMoreWidgetFallbackSheet.value = true
+      }
+      WidgetPinRequestResult.REQUEST_SENT -> Unit
+    }
+  }
+
+  fun dismissMoreWidgetFallbackSheet() {
+    _showMoreWidgetFallbackSheet.value = false
   }
 }

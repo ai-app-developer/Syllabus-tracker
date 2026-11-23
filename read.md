@@ -832,7 +832,96 @@ Timer Boundary / Backup Receiver / Test Alarm
 
 ---
 
-## 18. Resume Prompt
+## 18. Home Screen Widget Prompt & More Catalog Update
 
-Read this file fully before editing to keep Room schema (`version = 4`, `MIGRATION_1_2` + `MIGRATION_2_3` + `MIGRATION_3_4`), Backup Schema v2 (`schemaVersion = 1..2` streaming JSON + Replace/Merge ID remapping), Release CI/R8 config, SQL aggregate/projection DAOs, scoped ViewModel/Compose `StateFlow`s, conflated `WidgetUpdater`, RemoteViews widgets, `TimerMath` (`phaseCarryMs` + `pausedFromStatus` state machine), and the Primary + Backup `"timer_alarm_v2"` alarm system (`NonCancellable` + synchronous pref snapshot + `MediaPlayer` raw / verified `Ringtone` fallbacks + `AlarmDiagnosticLog`) intact.
+### Request (Verbatim)
+```text
+MINI UPDATE for the existing "Syllabus Tracker" Android app (Kotlin + Jetpack Compose + Room + RemoteViews widgets). Read read.md first. Do NOT change existing screens, widget designs, widget refresh logic, timer, alarm, database, backup format or performance setup. Only add a beautiful, calm "Add widget" prompt and a permanent entry in More.
+
+DESIGN PHILOSOPHY (think like Steve Jobs)
+One idea, one action. Nothing extra. Maximum 2 buttons. Generous whitespace, one clear headline, one short sentence. It must feel like a premium, human-made app, similar in spirit to how popular apps (for example Duolingo) invite users to add their home screen widget: a friendly bottom sheet showing the real widget, one primary action, one quiet dismiss.
+
+PART 1: THE PROMPT SHEET (ModalBottomSheet, not a plain AlertDialog)
+Layout, top to bottom, centered, 24dp horizontal padding, large rounded top corners (28dp), existing app colors and fonts:
+1. A live preview of the "Overview" widget drawn as a Compose composable that matches the real widget look (same ring, same texts), filled with the user's REAL data (percentage, books, chapters, completed). If there is no data yet, show a clean sample state (0%). The preview sits on a soft tint panel with a subtle shadow, slightly tilted never; no glow, no neon.
+2. Headline (one line, 24sp bold): "Your progress, one glance away"
+3. Body (one sentence, 15sp secondary color): "Add a widget to your home screen and see your syllabus without opening the app."
+4. Primary button (full width, 56dp, pill, solid accent color): "Add widget"
+5. Secondary action (plain text button, centered, secondary color): "Not now"
+That is ALL. No close "X", no checkbox, no third button, no "Don't show again". Swiping down or tapping outside counts as "Not now".
+
+PART 2: WHEN IT SHOWS (strict, non-annoying schedule)
+- Check on app start only, on the Home screen, ~600 ms after Home is visible (so startup is never blocked). Query AppWidgetManager.getAppWidgetIds for all 5 providers off the main thread.
+- If user already has ANY of the 5 widgets placed on their home screen: NEVER show the prompt.
+- If user dismissed ("Not now", swipe, outside tap) OR cancelled the system pin dialog, wait longer each time before asking again:
+  - 1st show: on first eligible app open
+  - Wait 2 days before 2nd show
+  - Wait 7 days before 3rd show
+  - Wait 14 days before 4th show
+  - Maximum 4 automatic appearances total, then never show automatically again.
+- Track in DataStore: widgetPromptShownCount (Int), widgetLastPromptTime (Long), widgetEverAdded (Boolean).
+- Do NOT show if: a timer session is running or paused, a recovery dialog is showing, any permission prompt or other dialog is open, or a notification permission dialog is pending on startup. Skip silently without incrementing the counter and check again on the next app start.
+- Only increment widgetPromptShownCount and set widgetLastPromptTime after the sheet actually becomes visible.
+
+PART 3: "ADD WIDGET" ACTION & SYSTEM PINNING
+- Call AppWidgetManager.requestPinAppWidget(provider, null, successCallback) so the Android system confirmation dialog handles pinning.
+- If pinning succeeds (via PendingIntent callback): mark widget added, refresh the widget with WidgetUpdater, close the sheet, and show a brief snackbar ("Widget added").
+- If user cancels the system dialog: do nothing, no error.
+- If isRequestPinAppWidgetSupported() is false (for example on some OEM launchers like Meizu Flyme) or pinning fails: switch the same sheet to 3 short numbered steps with icons ("1. Long-press an empty area of your home screen", "2. Tap Widgets", "3. Drag Syllabus Tracker onto the screen") and one "Got it" button.
+
+PART 4: PERMANENT ENTRY IN MORE (so user can always add later)
+- Add one row in MoreScreen ("Home screen widgets") opening a clean Home screen widgets screen.
+- Lists all 5 existing widgets (Overview, Dark Progress, Today's Plan, Done Ring, Continue Studying) with a preview, name, one-line description, an "Added ×N" badge if already placed (N > 0), and an enabled "Add" button using the exact same requestPinAppWidget + manual fallback flow. Guard against duplicate simultaneous pin requests. Re-check counts on ON_RESUME.
+
+PART 5: CONSTRAINTS
+- Do NOT modify existing RemoteViews widgets, widget designs, widget refresh logic, timer engine, alarm system, Room database schema, or backup export/import JSON format. Keep widgetPromptShownCount, widgetLastPromptTime, and widgetEverAdded strictly local in DataStore.
+- Keep all strings in strings.xml and use theme tokens.
+- Keep Release build (R8) working cleanly.
+
+TESTING CHECKLIST
+1. Fresh install: prompt appears calmly on Home after ~600 ms (unless startup notification permission prompt is pending).
+2. "Not now" / swipe dismiss: respects 2 days -> 7 days -> 14 days -> max 4 automatic appearances.
+3. Widget already placed on home screen: prompt never shows.
+4. Timer running/paused, recovery dialog, or another dialog open: skipped silently without incrementing counter.
+5. Pinning via prompt or More screen: marks widgetEverAdded, refreshes widgets, and displays "Widget added" snackbar.
+6. Unsupported launcher (isRequestPinAppWidgetSupported = false): switches cleanly to 3 manual steps + "Got it" without crashing.
+
+AFTER FINISHING
+1. Verify all 6 Testing Checklist items cleanly.
+2. List the changed files.
+3. Update read.md with this prompt verbatim, the prompt schedule + DataStore keys, and the checklist.
+4. Confirm debug tests and release R8 build succeed with zero errors.
+```
+
+### Prompt Schedule & Local-Only DataStore Keys
+- **DataStore Keys** (`UserPreferencesRepository` — local only, excluded from JSON Export/Import and preserved across `restorePreferences`):
+  - `widget_prompt_shown_count` (`widgetPromptShownCount: Int = 0`)
+  - `widget_last_prompt_time` (`widgetLastPromptTime: Long = 0L`)
+  - `widget_ever_added` (`widgetEverAdded: Boolean = false`)
+- **Schedule Rules (`WidgetPromptScheduler.shouldShowWidgetPrompt`)**:
+  - Triggered once per app start on `HomeRoute` ~600 ms after `!homeUiState.isLoading`.
+  - Queries `AppWidgetManager.getAppWidgetIds` across all 5 providers (`OverviewWidgetReceiver`, `DarkProgressWidgetReceiver`, `TodaysPlanWidgetReceiver`, `DoneRingWidgetReceiver`, `ContinueStudyingWidgetReceiver`) off the main thread (`Dispatchers.IO`).
+  - Blocked silently (without incrementing `widgetPromptShownCount`) when: any widget is placed (`widgetEverAdded = true`), `isTimerActive`, `recoveryPrompt != null`, any dialog/sheet open (`dialogsState`), `POST_NOTIFICATIONS` permission prompt pending on startup, or current destination is not `HomeRoute`.
+  - Cooldown schedule after sheet becomes visible (`onWidgetPromptSheetVisible`):
+    - Appearance 1 (`shownCount == 0`): eligible immediately
+    - Appearance 2 (`shownCount == 1`): `>= 2 days` (`2 * 86_400_000 ms`)
+    - Appearance 3 (`shownCount == 2`): `>= 7 days` (`7 * 86_400_000 ms`)
+    - Appearance 4 (`shownCount == 3`): `>= 14 days` (`14 * 86_400_000 ms`)
+    - `shownCount >= 4`: never shows automatically again.
+
+### Checklist
+- [x] `ModalBottomSheet` prompt (`WidgetPromptBottomSheet`) with live pure-Compose `OverviewWidgetLivePreview` (real data or `0%` clean state), headline, body, `"Add widget"` pill button, `"Not now"` text action, and 3-step manual fallback
+- [x] Non-annoying launch scheduler (`WidgetPromptScheduler`, ~600 ms on `HomeRoute`, IO provider count query, silent blocker checks, 2d -> 7d -> 14d -> max 4 schedule)
+- [x] `requestPinAppWidget` + `WidgetActionReceiver.ACTION_WIDGET_PIN_SUCCESS` marking `widgetEverAdded`, triggering `WidgetUpdater.updateNow(force = true)`, closing sheet, and showing `"Widget added"` snackbar
+- [x] `MoreScreen` -> `"Home screen widgets"` (`HomeScreenWidgetsRoute`) listing all 5 widgets with previews, `"Added ×N"` badges, `"Add"` buttons, duplicate-pin lock, and `ON_RESUME` count refresh
+- [x] Robolectric tests covering cooldown schedule, blockers, pin callback, unsupported launcher fallback, backup isolation, and Compose UI sheets/catalog
+- [x] Release R8 build & unit tests passing
+- Known bugs: None reported
+
+---
+
+## 19. Resume Prompt
+
+Read this file fully before editing to keep Room schema (`version = 4`, `MIGRATION_1_2` + `MIGRATION_2_3` + `MIGRATION_3_4`), Backup Schema v2 (`schemaVersion = 1..2` streaming JSON + Replace/Merge ID remapping), Release CI/R8 config, SQL aggregate/projection DAOs, scoped ViewModel/Compose `StateFlow`s, conflated `WidgetUpdater`, RemoteViews widgets + local-only widget prompt/catalog (`WidgetPromptScheduler`, `HomeScreenWidgetsRoute`), `TimerMath` (`phaseCarryMs` + `pausedFromStatus` state machine), and the Primary + Backup `"timer_alarm_v2"` alarm system (`NonCancellable` + synchronous pref snapshot + `MediaPlayer` raw / verified `Ringtone` fallbacks + `AlarmDiagnosticLog`) intact.
+
 

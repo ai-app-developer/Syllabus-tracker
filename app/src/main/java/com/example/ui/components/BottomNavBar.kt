@@ -51,13 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.ui.theme.AmbientShadow
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VioletGradientBottom
-import com.example.ui.theme.VioletGradientTop
+import com.example.ui.theme.AppTheme
 
 enum class BottomTab {
   HOME,
@@ -81,21 +75,22 @@ fun SyllabusBottomBar(
         .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 10.dp),
     contentAlignment = Alignment.BottomCenter,
   ) {
+    val colors = AppTheme.colors
     val barShape = RoundedCornerShape(28.dp)
     Surface(
       modifier =
         Modifier.fillMaxWidth()
           .height(64.dp)
           .shadow(
-            elevation = 12.dp,
+            elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 12.dp,
             shape = barShape,
             clip = false,
-            ambientColor = AmbientShadow,
-            spotColor = AmbientShadow,
+            ambientColor = colors.ambientShadow,
+            spotColor = colors.ambientShadow,
           ),
       shape = barShape,
-      color = CardSurface,
-      border = BorderStroke(1.dp, HairlineBorder),
+      color = colors.surface,
+      border = BorderStroke(1.dp, colors.border),
     ) {}
 
     Row(
@@ -134,11 +129,11 @@ fun SyllabusBottomBar(
             Modifier.offset(y = (-14).dp)
               .size(56.dp)
               .shadow(
-                elevation = 10.dp,
+                elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
                 shape = CircleShape,
                 clip = false,
-                ambientColor = AmbientShadow,
-                spotColor = AmbientShadow,
+                ambientColor = colors.ambientShadow,
+                spotColor = colors.ambientShadow,
               )
               .testTag("nav_add_chapter"),
         ) {
@@ -147,7 +142,7 @@ fun SyllabusBottomBar(
               Modifier.fillMaxSize()
                 .background(
                   Brush.verticalGradient(
-                    colors = listOf(VioletGradientTop, VioletGradientBottom)
+                    colors = listOf(colors.primaryGradientTop, colors.primaryGradientBottom)
                   )
                 ),
             contentAlignment = Alignment.Center,
@@ -155,7 +150,7 @@ fun SyllabusBottomBar(
             Icon(
               imageVector = Icons.Default.Add,
               contentDescription = stringResource(R.string.add_chapter),
-              tint = Color.White,
+              tint = colors.onPrimary,
               modifier = Modifier.size(28.dp),
             )
           }
@@ -194,7 +189,8 @@ private fun BottomNavItem(
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val tint = if (selected) PrimaryIndigo else TextSecondary
+  val colors = AppTheme.colors
+  val tint = if (selected) colors.primary else colors.textSecondary
   val interactionSource = remember { MutableInteractionSource() }
   Column(
     modifier =

@@ -53,9 +53,11 @@ import com.example.ui.components.ImportBackupResultDialog
 import com.example.ui.components.ReminderTimePickerDialog
 import com.example.ui.components.SyllabusBottomBar
 import com.example.ui.components.TimerRecoveryDialog
+import com.example.ui.components.WidgetPromptBottomSheet
 import com.example.ui.navigation.BookDetailRoute
 import com.example.ui.navigation.BooksRoute
 import com.example.ui.navigation.HomeRoute
+import com.example.ui.navigation.HomeScreenWidgetsRoute
 import com.example.ui.navigation.MoreRoute
 import com.example.ui.navigation.ProgressRoute
 import com.example.ui.navigation.ReadingHistoryRoute
@@ -64,6 +66,7 @@ import com.example.ui.navigation.StudyingRoute
 import com.example.ui.screens.BookDetailScreen
 import com.example.ui.screens.BooksScreen
 import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.HomeScreenWidgetsScreen
 import com.example.ui.screens.MoreScreen
 import com.example.ui.screens.ProgressScreen
 import com.example.ui.screens.ReadingHistoryScreen
@@ -75,8 +78,10 @@ import com.example.ui.viewmodel.BookDetailUiState
 import com.example.ui.viewmodel.SyllabusViewModel
 import com.example.ui.viewmodel.TimerUiEvent
 import com.example.ui.viewmodel.TimerViewModel
+import com.example.ui.viewmodel.WidgetPromptSheetState
 import com.example.widgets.WidgetIntents
 import com.example.widgets.WidgetUpdater
+import kotlinx.coroutines.delay
 
 data class PendingWidgetNav(
   val id: Long,
@@ -147,6 +152,10 @@ fun SyllabusApp(
 ) {
   val dialogsState by viewModel.dialogsState.collectAsStateWithLifecycle()
   val preferencesState by viewModel.preferencesState.collectAsStateWithLifecycle()
+  val homeUiState by viewModel.homeUiState.collectAsStateWithLifecycle()
+  val widgetPromptSheetState by viewModel.widgetPromptSheet.collectAsStateWithLifecycle()
+  val isPinRequestActive by viewModel.isPinRequestActive.collectAsStateWithLifecycle()
+  val isTimerActiveGlobal by timerViewModel.isTimerActive.collectAsStateWithLifecycle()
   val recoveryPrompt by timerViewModel.recoveryPrompt.collectAsStateWithLifecycle()
   val navController = rememberNavController()
   val backStackEntry by navController.currentBackStackEntryAsState()
@@ -164,6 +173,7 @@ fun SyllabusApp(
           if (app != null) {
             WidgetUpdater.requestUpdate(app)
           }
+          viewModel.refreshWidgetCounts()
         }
         Lifecycle.Event.ON_STOP -> {
           timerViewModel.touchLastKnownWallTime()
@@ -202,11 +212,29 @@ fun SyllabusApp(
     }
   }
 
+  LaunchedEffect(homeUiState.isLoading) {
+    if (homeUiState.isLoading) return@LaunchedEffect
+    delay(600L)
+    val isStartupPermissionPending =
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        preferencesState.reminderEnabled &&
+        !NotificationHelper.hasNotificationPermission(context)
+    val currentIsHome =
+      navController.currentBackStackEntry?.destination?.hasRoute<HomeRoute>() == true
+    viewModel.checkWidgetPromptOnAppStart(
+      isTimerActive = timerViewModel.isTimerActive.value,
+      hasRecoveryPrompt = timerViewModel.recoveryPrompt.value != null,
+      isStartupPermissionPending = isStartupPermissionPending,
+      isCurrentlyOnHome = currentIsHome,
+    )
+  }
+
   val isSecondaryTimerOrDetailScreen =
     currentDestination?.hasRoute<BookDetailRoute>() == true ||
       currentDestination?.hasRoute<StudyTimerSetupRoute>() == true ||
       currentDestination?.hasRoute<StudyingRoute>() == true ||
-      currentDestination?.hasRoute<ReadingHistoryRoute>() == true
+      currentDestination?.hasRoute<ReadingHistoryRoute>() == true ||
+      currentDestination?.hasRoute<HomeScreenWidgetsRoute>() == true
 
   val selectedTab =
     when {
@@ -400,6 +428,9 @@ fun SyllabusApp(
           onOpenReadingHistory = {
             navController.navigate(ReadingHistoryRoute) { launchSingleTop = true }
           },
+          onOpenHomeWidgets = {
+            navController.navigate(HomeScreenWidgetsRoute) { launchSingleTop = true }
+          },
           onEditDailyGoal = { viewModel.openDailyGoalDialog() },
           onToggleReminder = { viewModel.setReminderEnabled(it) },
           onEditReminderTime = { viewModel.openTimePicker() },
@@ -489,6 +520,21 @@ fun SyllabusApp(
           onStartNewSession = {
             navController.navigate(StudyTimerSetupRoute) { launchSingleTop = true }
           },
+        )
+      }
+
+      composable<HomeScreenWidgetsRoute> {
+        val widgetCounts by viewModel.widgetCounts.collectAsStateWithLifecycle()
+        val showFallback by viewModel.showMoreWidgetFallbackSheet.collectAsStateWithLifecycle()
+        HomeScreenWidgetsScreen(
+          widgetCounts = widgetCounts,
+          isPinBusy = isPinRequestActive,
+          showFallbackSheet = showFallback,
+          innerPadding = innerPadding,
+          onBackClick = { navController.popBackStack() },
+          onRefreshCounts = { viewModel.refreshWidgetCounts() },
+          onAddWidgetClick = { type -> viewModel.requestPinWidgetFromSettings(type) },
+          onDismissFallbackSheet = { viewModel.dismissMoreWidgetFallbackSheet() },
         )
       }
     }
@@ -587,6 +633,21 @@ fun SyllabusApp(
     BackupErrorDialog(
       message = errorMsg,
       onDismiss = { viewModel.dismissBackupError() },
+    )
+  }
+
+  val visiblePrompt = widgetPromptSheetState as? WidgetPromptSheetState.Visible
+  if (visiblePrompt != null && !isTimerActiveGlobal && recoveryPrompt == null) {
+    WidgetPromptBottomSheet(
+      totalBooks = homeUiState.totalBooks,
+      totalChapters = homeUiState.totalChapters,
+      completedChapters = homeUiState.completedChapters,
+      overallPercentage = homeUiState.overallPercentage,
+      isFallbackManualSteps = visiblePrompt.isFallbackManualSteps,
+      isPinBusy = isPinRequestActive,
+      onBecameVisible = { viewModel.onWidgetPromptSheetVisible() },
+      onAddWidgetClick = { viewModel.requestPinOverviewFromPrompt() },
+      onDismiss = { viewModel.dismissWidgetPrompt() },
     )
   }
 }

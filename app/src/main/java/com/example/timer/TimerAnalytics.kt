@@ -35,6 +35,7 @@ data class BookStudySlice(
   val bookName: String,
   val totalMs: Long,
   val colorHex: Long,
+  val colorIndex: Int = 0,
 )
 
 @Immutable
@@ -151,6 +152,7 @@ object TimerAnalyticsCalculator {
             bookName = row.bookName,
             totalMs = row.totalMs,
             colorHex = slicePalette[idx],
+            colorIndex = idx,
           )
         }
       } else {
@@ -161,6 +163,7 @@ object TimerAnalyticsCalculator {
               bookName = row.bookName,
               totalMs = row.totalMs,
               colorHex = slicePalette[idx],
+              colorIndex = idx,
             )
           }
         val othersMs = sortedBooks.drop(4).sumOf { it.totalMs }
@@ -170,6 +173,7 @@ object TimerAnalyticsCalculator {
             bookName = "Others",
             totalMs = othersMs,
             colorHex = slicePalette[4],
+            colorIndex = 4,
           )
       }
 
@@ -362,6 +366,7 @@ object TimerAnalyticsCalculator {
           bookName = name,
           totalMs = totalMs,
           colorHex = slicePalette[idx],
+          colorIndex = idx,
         )
       }
     } else {
@@ -372,6 +377,7 @@ object TimerAnalyticsCalculator {
             bookName = name,
             totalMs = totalMs,
             colorHex = slicePalette[idx],
+            colorIndex = idx,
           )
         }
       val othersMs = grouped.drop(4).sumOf { it.third }
@@ -381,6 +387,7 @@ object TimerAnalyticsCalculator {
           bookName = "Others",
           totalMs = othersMs,
           colorHex = slicePalette[4],
+          colorIndex = 4,
         )
     }
   }

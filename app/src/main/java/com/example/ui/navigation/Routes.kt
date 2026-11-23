@@ -17,3 +17,5 @@ import kotlinx.serialization.Serializable
 @Serializable object StudyingRoute
 
 @Serializable object ReadingHistoryRoute
+
+@Serializable object HomeScreenWidgetsRoute

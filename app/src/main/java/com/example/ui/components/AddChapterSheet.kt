@@ -62,14 +62,7 @@ import com.example.R
 import com.example.data.local.entity.ChapterEntity
 import com.example.data.repository.BookProgressSummary
 import com.example.ui.model.StableList
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.ErrorRed
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.ProgressTrack
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.AppTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,12 +96,13 @@ fun AddChapterBottomSheet(
   var nameError by remember { mutableStateOf(false) }
   var numberError by remember { mutableStateOf(false) }
 
+  val colors = AppTheme.colors
   val selectedBook = books.firstOrNull { it.book.id == selectedBookId }
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
     sheetState = sheetState,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
   ) {
     Column(
@@ -126,7 +120,7 @@ fun AddChapterBottomSheet(
         Icon(
           imageVector = Icons.Default.Close,
           contentDescription = "Close",
-          tint = TextSecondary,
+          tint = colors.textSecondary,
         )
       }
 
@@ -140,7 +134,7 @@ fun AddChapterBottomSheet(
             stringResource(R.string.edit_chapter)
           },
         style = MaterialTheme.typography.headlineMedium,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
       Spacer(modifier = Modifier.height(4.dp))
       Text(
@@ -151,7 +145,7 @@ fun AddChapterBottomSheet(
             stringResource(R.string.edit_chapter_subtitle)
           },
         style = MaterialTheme.typography.bodyLarge,
-        color = TextSecondary,
+        color = colors.textSecondary,
       )
 
       Spacer(modifier = Modifier.height(20.dp))
@@ -159,8 +153,8 @@ fun AddChapterBottomSheet(
       if (books.isEmpty()) {
         Surface(
           shape = RoundedCornerShape(12.dp),
-          color = LightIndigoTint,
-          border = BorderStroke(1.dp, HairlineBorder),
+          color = colors.tint,
+          border = BorderStroke(1.dp, colors.border),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Row(
@@ -171,23 +165,23 @@ fun AddChapterBottomSheet(
             Text(
               text = "Create a book first to add chapters.",
               style = MaterialTheme.typography.bodyMedium,
-              color = TextPrimary,
+              color = colors.textPrimary,
               modifier = Modifier.weight(1f),
             )
             Spacer(modifier = Modifier.width(8.dp))
             OutlinedButton(
               onClick = onCreateBookClick,
               shape = RoundedCornerShape(10.dp),
-              border = BorderStroke(1.dp, PrimaryIndigo),
+              border = BorderStroke(1.dp, colors.primary),
             ) {
               Icon(
                 imageVector = Icons.Default.Add,
                 contentDescription = null,
-                tint = PrimaryIndigo,
+                tint = colors.primary,
                 modifier = Modifier.size(16.dp),
               )
               Spacer(modifier = Modifier.width(4.dp))
-              Text("New Book", color = PrimaryIndigo)
+              Text("New Book", color = colors.primary)
             }
           }
         }
@@ -198,8 +192,8 @@ fun AddChapterBottomSheet(
         ) {
           Surface(
             shape = RoundedCornerShape(12.dp),
-            color = CardSurface,
-            border = BorderStroke(1.dp, if (bookError) ErrorRed else HairlineBorder),
+            color = colors.inputSurface,
+            border = BorderStroke(1.dp, if (bookError) colors.error else colors.border),
             modifier =
               Modifier.fillMaxWidth()
                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
@@ -213,13 +207,13 @@ fun AddChapterBottomSheet(
                 modifier =
                   Modifier.size(36.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(LightIndigoTint),
+                    .background(colors.tint),
                 contentAlignment = Alignment.Center,
               ) {
                 Icon(
                   imageVector = Icons.AutoMirrored.Outlined.MenuBook,
                   contentDescription = null,
-                  tint = PrimaryIndigo,
+                  tint = colors.primary,
                   modifier = Modifier.size(20.dp),
                 )
               }
@@ -227,7 +221,7 @@ fun AddChapterBottomSheet(
               Text(
                 text = selectedBook?.book?.name ?: "Select a Book",
                 style = MaterialTheme.typography.titleMedium,
-                color = if (selectedBook != null) TextPrimary else TextSecondary,
+                color = if (selectedBook != null) colors.textPrimary else colors.textSecondary,
                 modifier = Modifier.weight(1f),
               )
               Icon(
@@ -235,7 +229,7 @@ fun AddChapterBottomSheet(
                   if (dropdownExpanded) Icons.Default.KeyboardArrowUp
                   else Icons.Default.KeyboardArrowDown,
                 contentDescription = "Select book",
-                tint = TextSecondary,
+                tint = colors.textSecondary,
               )
             }
           }
@@ -243,11 +237,11 @@ fun AddChapterBottomSheet(
           ExposedDropdownMenu(
             expanded = dropdownExpanded,
             onDismissRequest = { dropdownExpanded = false },
-            containerColor = CardSurface,
+            containerColor = colors.dialogSurface,
           ) {
             books.forEach { summary ->
               DropdownMenuItem(
-                text = { Text(summary.book.name, color = TextPrimary) },
+                text = { Text(summary.book.name, color = colors.textPrimary) },
                 onClick = {
                   selectedBookId = summary.book.id
                   bookError = false
@@ -264,7 +258,7 @@ fun AddChapterBottomSheet(
       Text(
         text = stringResource(R.string.chapter_name_label),
         style = MaterialTheme.typography.labelLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
       Spacer(modifier = Modifier.height(8.dp))
       OutlinedTextField(
@@ -273,12 +267,12 @@ fun AddChapterBottomSheet(
           chapterName = it
           if (nameError && it.isNotBlank()) nameError = false
         },
-        placeholder = { Text("e.g. Algebra", color = TextSecondary) },
+        placeholder = { Text("e.g. Algebra", color = colors.textSecondary) },
         singleLine = true,
         isError = nameError,
         supportingText =
           if (nameError) {
-            { Text("Chapter name is required", color = ErrorRed) }
+            { Text("Chapter name is required", color = colors.error) }
           } else {
             null
           },
@@ -286,10 +280,13 @@ fun AddChapterBottomSheet(
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         colors =
           OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = PrimaryIndigo,
-            unfocusedBorderColor = HairlineBorder,
-            focusedContainerColor = CardSurface,
-            unfocusedContainerColor = CardSurface,
+            focusedBorderColor = colors.primary,
+            unfocusedBorderColor = colors.border,
+            focusedContainerColor = colors.inputSurface,
+            unfocusedContainerColor = colors.inputSurface,
+            focusedTextColor = colors.textPrimary,
+            unfocusedTextColor = colors.textPrimary,
+            cursorColor = colors.primary,
           ),
         modifier = Modifier.fillMaxWidth().testTag("chapter_name_input"),
       )
@@ -299,7 +296,7 @@ fun AddChapterBottomSheet(
       Text(
         text = stringResource(R.string.chapter_number_label),
         style = MaterialTheme.typography.labelLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
       Spacer(modifier = Modifier.height(8.dp))
       OutlinedTextField(
@@ -312,16 +309,16 @@ fun AddChapterBottomSheet(
         prefix = {
           Text(
             text = "#  ",
-            color = TextSecondary,
+            color = colors.textSecondary,
             fontWeight = FontWeight.Medium,
           )
         },
-        placeholder = { Text("3", color = TextSecondary) },
+        placeholder = { Text("3", color = colors.textSecondary) },
         singleLine = true,
         isError = numberError,
         supportingText =
           if (numberError) {
-            { Text("Enter a valid chapter number (1 or higher)", color = ErrorRed) }
+            { Text("Enter a valid chapter number (1 or higher)", color = colors.error) }
           } else {
             null
           },
@@ -329,10 +326,13 @@ fun AddChapterBottomSheet(
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         colors =
           OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = PrimaryIndigo,
-            unfocusedBorderColor = HairlineBorder,
-            focusedContainerColor = CardSurface,
-            unfocusedContainerColor = CardSurface,
+            focusedBorderColor = colors.primary,
+            unfocusedBorderColor = colors.border,
+            focusedContainerColor = colors.inputSurface,
+            unfocusedContainerColor = colors.inputSurface,
+            focusedTextColor = colors.textPrimary,
+            unfocusedTextColor = colors.textPrimary,
+            cursorColor = colors.primary,
           ),
         modifier = Modifier.fillMaxWidth().testTag("chapter_number_input"),
       )
@@ -347,17 +347,17 @@ fun AddChapterBottomSheet(
         Text(
           text = stringResource(R.string.mark_as_completed),
           style = MaterialTheme.typography.titleMedium,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
         Switch(
           checked = isCompleted,
           onCheckedChange = { isCompleted = it },
           colors =
             SwitchDefaults.colors(
-              checkedThumbColor = Color.White,
-              checkedTrackColor = PrimaryIndigo,
-              uncheckedThumbColor = Color.White,
-              uncheckedTrackColor = ProgressTrack,
+              checkedThumbColor = colors.switchThumb,
+              checkedTrackColor = colors.primarySolid,
+              uncheckedThumbColor = colors.switchThumb,
+              uncheckedTrackColor = colors.progressTrack,
               uncheckedBorderColor = Color.Transparent,
             ),
           modifier = Modifier.testTag("chapter_completed_switch"),
@@ -386,8 +386,8 @@ fun AddChapterBottomSheet(
         shape = RoundedCornerShape(28.dp),
         colors =
           ButtonDefaults.buttonColors(
-            containerColor = PrimaryIndigo,
-            contentColor = Color.White,
+            containerColor = colors.primarySolid,
+            contentColor = colors.onPrimary,
           ),
         modifier = Modifier.fillMaxWidth().height(54.dp).testTag("submit_chapter_button"),
       ) {

@@ -69,32 +69,10 @@ import com.example.timer.TimerMode
 import com.example.ui.components.PomodoroCustomDialog
 import com.example.ui.components.SessionGoalDialog
 import com.example.ui.components.TimerPermissionsChecklistDialog
-import com.example.ui.theme.AmbientShadow
-import com.example.ui.theme.AppBackground
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.InputSurface
-import com.example.ui.theme.LightGreenBorder
-import com.example.ui.theme.LightGreenTint
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.SuccessGreen
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.VioletGradientBottom
-import com.example.ui.theme.VioletGradientTop
+import com.example.ui.theme.AppTheme
 import com.example.ui.viewmodel.LiveStudyingUiState
 import com.example.ui.viewmodel.TimerSetupUiState
 import kotlinx.coroutines.flow.StateFlow
-
-private val SetupPrimaryGradientBrush =
-  Brush.verticalGradient(listOf(VioletGradientTop, VioletGradientBottom))
-private val SetupDisabledGradientBrush =
-  Brush.verticalGradient(
-    listOf(PrimaryIndigo.copy(alpha = 0.42f), PrimaryIndigo.copy(alpha = 0.42f))
-  )
-private val SetupUnselectedTileBrush =
-  Brush.verticalGradient(listOf(Color(0xFFF0F1FA), Color(0xFFEAECFA)))
 
 @Composable
 fun StudyTimerSetupScreen(
@@ -116,6 +94,7 @@ fun StudyTimerSetupScreen(
   onAddBookClick: () -> Unit,
   onAddChapterClick: (Long) -> Unit,
 ) {
+  val colors = AppTheme.colors
   var showBookMenu by remember { mutableStateOf(false) }
   var showChapterMenu by remember { mutableStateOf(false) }
   var showGoalDialog by remember { mutableStateOf(false) }
@@ -128,8 +107,15 @@ fun StudyTimerSetupScreen(
     state.chaptersForSelectedBook.firstOrNull { it.id == setup.selectedChapterId }
   val canStart = selectedBook != null && selectedChapter != null
 
+  val primaryGradientBrush =
+    Brush.verticalGradient(listOf(colors.primaryGradientTop, colors.primaryGradientBottom))
+  val disabledGradientBrush =
+    Brush.verticalGradient(
+      listOf(colors.primarySolid.copy(alpha = 0.42f), colors.primarySolid.copy(alpha = 0.42f))
+    )
+
   Box(
-    modifier = Modifier.fillMaxSize().background(AppBackground),
+    modifier = Modifier.fillMaxSize().background(colors.screenBackground),
     contentAlignment = Alignment.TopCenter,
   ) {
     Column(
@@ -155,7 +141,7 @@ fun StudyTimerSetupScreen(
           Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
             contentDescription = "Back",
-            tint = TextPrimary,
+            tint = colors.textPrimary,
             modifier = Modifier.size(28.dp),
           )
         }
@@ -164,7 +150,7 @@ fun StudyTimerSetupScreen(
             text = stringResource(R.string.study_timer_title),
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
         }
         Spacer(modifier = Modifier.size(48.dp))
@@ -184,16 +170,16 @@ fun StudyTimerSetupScreen(
       val containerShape = RoundedCornerShape(22.dp)
       Surface(
         shape = containerShape,
-        color = CardSurface,
-        border = BorderStroke(1.dp, HairlineBorder),
+        color = colors.surface,
+        border = BorderStroke(1.dp, colors.border),
         modifier =
           Modifier.fillMaxWidth()
             .shadow(
-              elevation = 10.dp,
+              elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 10.dp,
               shape = containerShape,
               clip = false,
-              ambientColor = AmbientShadow,
-              spotColor = AmbientShadow,
+              ambientColor = colors.ambientShadow,
+              spotColor = colors.ambientShadow,
             ),
       ) {
         Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
@@ -201,7 +187,7 @@ fun StudyTimerSetupScreen(
             text = "Select Book",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
           Spacer(modifier = Modifier.height(8.dp))
 
@@ -211,8 +197,8 @@ fun StudyTimerSetupScreen(
                 if (state.books.isEmpty()) onAddBookClick() else showBookMenu = true
               },
               shape = RoundedCornerShape(14.dp),
-              color = InputSurface,
-              border = BorderStroke(1.dp, HairlineBorder),
+              color = colors.inputSurface,
+              border = BorderStroke(1.dp, colors.border),
               modifier = Modifier.fillMaxWidth().testTag("timer_select_book_dropdown"),
             ) {
               Row(
@@ -223,13 +209,13 @@ fun StudyTimerSetupScreen(
                   modifier =
                     Modifier.size(30.dp)
                       .clip(RoundedCornerShape(8.dp))
-                      .background(LightIndigoTint),
+                      .background(colors.tint),
                   contentAlignment = Alignment.Center,
                 ) {
                   Icon(
                     imageVector = Icons.AutoMirrored.Outlined.MenuBook,
                     contentDescription = null,
-                    tint = PrimaryIndigo,
+                    tint = colors.primary,
                     modifier = Modifier.size(18.dp),
                   )
                 }
@@ -238,7 +224,7 @@ fun StudyTimerSetupScreen(
                   text = selectedBook?.name ?: "No books yet — Tap to add a book",
                   fontSize = 15.sp,
                   fontWeight = FontWeight.Medium,
-                  color = if (selectedBook != null) TextPrimary else TextSecondary,
+                  color = if (selectedBook != null) colors.textPrimary else colors.textSecondary,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                   modifier = Modifier.weight(1f),
@@ -246,7 +232,7 @@ fun StudyTimerSetupScreen(
                 Icon(
                   imageVector = Icons.Default.KeyboardArrowDown,
                   contentDescription = "Choose book",
-                  tint = TextSecondary,
+                  tint = colors.textSecondary,
                 )
               }
             }
@@ -254,12 +240,12 @@ fun StudyTimerSetupScreen(
             DropdownMenu(
               expanded = showBookMenu,
               onDismissRequest = { showBookMenu = false },
-              containerColor = CardSurface,
+              containerColor = colors.dialogSurface,
             ) {
               state.books.forEach { book ->
                 key(book.id) {
                   DropdownMenuItem(
-                    text = { Text(book.name, color = TextPrimary) },
+                    text = { Text(book.name, color = colors.textPrimary) },
                     onClick = {
                       onSelectBook(book.id)
                       showBookMenu = false
@@ -276,7 +262,7 @@ fun StudyTimerSetupScreen(
             text = "Select Chapter",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
           Spacer(modifier = Modifier.height(8.dp))
 
@@ -290,8 +276,8 @@ fun StudyTimerSetupScreen(
                 }
               },
               shape = RoundedCornerShape(14.dp),
-              color = InputSurface,
-              border = BorderStroke(1.dp, HairlineBorder),
+              color = colors.inputSurface,
+              border = BorderStroke(1.dp, colors.border),
               modifier = Modifier.fillMaxWidth().testTag("timer_select_chapter_dropdown"),
             ) {
               Row(
@@ -302,13 +288,13 @@ fun StudyTimerSetupScreen(
                   modifier =
                     Modifier.size(30.dp)
                       .clip(RoundedCornerShape(8.dp))
-                      .background(LightIndigoTint),
+                      .background(colors.tint),
                   contentAlignment = Alignment.Center,
                 ) {
                   Icon(
                     imageVector = Icons.Outlined.BookmarkBorder,
                     contentDescription = null,
-                    tint = PrimaryIndigo,
+                    tint = colors.primary,
                     modifier = Modifier.size(18.dp),
                   )
                 }
@@ -323,7 +309,7 @@ fun StudyTimerSetupScreen(
                   text = chapterText,
                   fontSize = 15.sp,
                   fontWeight = FontWeight.Medium,
-                  color = if (selectedChapter != null) TextPrimary else TextSecondary,
+                  color = if (selectedChapter != null) colors.textPrimary else colors.textSecondary,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                   modifier = Modifier.weight(1f),
@@ -331,7 +317,7 @@ fun StudyTimerSetupScreen(
                 Icon(
                   imageVector = Icons.Default.KeyboardArrowDown,
                   contentDescription = "Choose chapter",
-                  tint = TextSecondary,
+                  tint = colors.textSecondary,
                 )
               }
             }
@@ -339,7 +325,7 @@ fun StudyTimerSetupScreen(
             DropdownMenu(
               expanded = showChapterMenu,
               onDismissRequest = { showChapterMenu = false },
-              containerColor = CardSurface,
+              containerColor = colors.dialogSurface,
             ) {
               state.chaptersForSelectedBook.forEach { chapter ->
                 key(chapter.id) {
@@ -347,7 +333,7 @@ fun StudyTimerSetupScreen(
                     text = {
                       Text(
                         text = "Chapter ${chapter.number}: ${chapter.name}",
-                        color = TextPrimary,
+                        color = colors.textPrimary,
                       )
                     },
                     onClick = {
@@ -363,14 +349,14 @@ fun StudyTimerSetupScreen(
           HorizontalDivider(
             modifier = Modifier.padding(vertical = 16.dp),
             thickness = 1.dp,
-            color = HairlineBorder,
+            color = colors.border,
           )
 
           Text(
             text = "Timer Mode",
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
           Spacer(modifier = Modifier.height(10.dp))
 
@@ -415,10 +401,10 @@ fun StudyTimerSetupScreen(
                 label = { Text("25 / 5 min") },
                 colors =
                   FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo,
-                    selectedLabelColor = Color.White,
-                    containerColor = InputSurface,
-                    labelColor = TextPrimary,
+                    selectedContainerColor = colors.primarySolid,
+                    selectedLabelColor = colors.onPrimary,
+                    containerColor = colors.inputSurface,
+                    labelColor = colors.textPrimary,
                   ),
               )
               FilterChip(
@@ -427,10 +413,10 @@ fun StudyTimerSetupScreen(
                 label = { Text("50 / 10 min") },
                 colors =
                   FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo,
-                    selectedLabelColor = Color.White,
-                    containerColor = InputSurface,
-                    labelColor = TextPrimary,
+                    selectedContainerColor = colors.primarySolid,
+                    selectedLabelColor = colors.onPrimary,
+                    containerColor = colors.inputSurface,
+                    labelColor = colors.textPrimary,
                   ),
               )
               FilterChip(
@@ -444,10 +430,10 @@ fun StudyTimerSetupScreen(
                 },
                 colors =
                   FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo,
-                    selectedLabelColor = Color.White,
-                    containerColor = InputSurface,
-                    labelColor = TextPrimary,
+                    selectedContainerColor = colors.primarySolid,
+                    selectedLabelColor = colors.onPrimary,
+                    containerColor = colors.inputSurface,
+                    labelColor = colors.textPrimary,
                   ),
               )
             }
@@ -461,16 +447,16 @@ fun StudyTimerSetupScreen(
       Surface(
         onClick = { showGoalDialog = true },
         shape = secondaryCardShape,
-        color = CardSurface,
-        border = BorderStroke(1.dp, HairlineBorder),
+        color = colors.surface,
+        border = BorderStroke(1.dp, colors.border),
         modifier =
           Modifier.fillMaxWidth()
             .shadow(
-              elevation = 8.dp,
+              elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
               shape = secondaryCardShape,
               clip = false,
-              ambientColor = AmbientShadow,
-              spotColor = AmbientShadow,
+              ambientColor = colors.ambientShadow,
+              spotColor = colors.ambientShadow,
             )
             .testTag("timer_set_goal_card"),
       ) {
@@ -482,13 +468,13 @@ fun StudyTimerSetupScreen(
             modifier =
               Modifier.size(42.dp)
                 .clip(CircleShape)
-                .background(LightIndigoTint),
+                .background(colors.tint),
             contentAlignment = Alignment.Center,
           ) {
             Icon(
               imageVector = Icons.Outlined.TrackChanges,
               contentDescription = null,
-              tint = PrimaryIndigo,
+              tint = colors.primary,
               modifier = Modifier.size(22.dp),
             )
           }
@@ -499,12 +485,12 @@ fun StudyTimerSetupScreen(
                 text = "Set Goal ",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                color = TextPrimary,
+                color = colors.textPrimary,
               )
               Text(
                 text = "(Optional)",
                 fontSize = 13.sp,
-                color = TextSecondary,
+                color = colors.textSecondary,
               )
             }
             Spacer(modifier = Modifier.height(2.dp))
@@ -513,14 +499,14 @@ fun StudyTimerSetupScreen(
                 setup.goalMinutes?.let { TimerMath.formatGoalWords(it * 60_000L) }
                   ?: "No goal set",
               fontSize = 14.sp,
-              color = TextPrimary,
+              color = colors.textPrimary,
               fontWeight = FontWeight.Medium,
             )
           }
           Icon(
             imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
             contentDescription = "Edit session goal",
-            tint = TextSecondary,
+            tint = colors.textSecondary,
           )
         }
       }
@@ -529,16 +515,16 @@ fun StudyTimerSetupScreen(
 
       Surface(
         shape = secondaryCardShape,
-        color = CardSurface,
-        border = BorderStroke(1.dp, HairlineBorder),
+        color = colors.surface,
+        border = BorderStroke(1.dp, colors.border),
         modifier =
           Modifier.fillMaxWidth()
             .shadow(
-              elevation = 8.dp,
+              elevation = if (colors.isAmoled || colors.isGlass) 0.dp else 8.dp,
               shape = secondaryCardShape,
               clip = false,
-              ambientColor = AmbientShadow,
-              spotColor = AmbientShadow,
+              ambientColor = colors.ambientShadow,
+              spotColor = colors.ambientShadow,
             ),
       ) {
         Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -546,7 +532,7 @@ fun StudyTimerSetupScreen(
             Icon(
               imageVector = Icons.Outlined.Edit,
               contentDescription = null,
-              tint = PrimaryIndigo,
+              tint = colors.primary,
               modifier = Modifier.size(18.dp),
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -554,12 +540,12 @@ fun StudyTimerSetupScreen(
               text = "Notes ",
               fontSize = 15.sp,
               fontWeight = FontWeight.Bold,
-              color = TextPrimary,
+              color = colors.textPrimary,
             )
             Text(
               text = "(Optional)",
               fontSize = 13.sp,
-              color = TextSecondary,
+              color = colors.textSecondary,
             )
           }
           Spacer(modifier = Modifier.height(10.dp))
@@ -567,16 +553,19 @@ fun StudyTimerSetupScreen(
             value = setup.notes,
             onValueChange = onNotesChange,
             placeholder = {
-              Text("e.g., Practice exercises, revision", color = TextSecondary, fontSize = 14.sp)
+              Text("e.g., Practice exercises, revision", color = colors.textSecondary, fontSize = 14.sp)
             },
             maxLines = 3,
             shape = RoundedCornerShape(14.dp),
             colors =
               OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = PrimaryIndigo,
-                unfocusedBorderColor = HairlineBorder,
-                focusedContainerColor = InputSurface,
-                unfocusedContainerColor = InputSurface,
+                focusedBorderColor = colors.primary,
+                unfocusedBorderColor = colors.border,
+                focusedContainerColor = colors.inputSurface,
+                unfocusedContainerColor = colors.inputSurface,
+                focusedTextColor = colors.textPrimary,
+                unfocusedTextColor = colors.textPrimary,
+                cursorColor = colors.primary,
               ),
             modifier = Modifier.fillMaxWidth().testTag("timer_setup_notes_input"),
           )
@@ -604,11 +593,11 @@ fun StudyTimerSetupScreen(
           Modifier.fillMaxWidth()
             .height(54.dp)
             .shadow(
-              elevation = if (ctaEnabled) 10.dp else 0.dp,
+              elevation = if (ctaEnabled && !colors.isAmoled && !colors.isGlass) 10.dp else 0.dp,
               shape = ctaShape,
               clip = false,
-              ambientColor = AmbientShadow,
-              spotColor = AmbientShadow,
+              ambientColor = colors.ambientShadow,
+              spotColor = colors.ambientShadow,
             )
             .testTag("start_timer_button"),
       ) {
@@ -616,7 +605,7 @@ fun StudyTimerSetupScreen(
           modifier =
             Modifier.fillMaxSize()
               .background(
-                if (ctaEnabled) SetupPrimaryGradientBrush else SetupDisabledGradientBrush
+                if (ctaEnabled) primaryGradientBrush else disabledGradientBrush
               ),
           contentAlignment = Alignment.Center,
         ) {
@@ -624,7 +613,7 @@ fun StudyTimerSetupScreen(
             Icon(
               imageVector = Icons.Default.PlayArrow,
               contentDescription = null,
-              tint = Color.White,
+              tint = colors.onPrimary,
               modifier = Modifier.size(22.dp),
             )
             Spacer(modifier = Modifier.width(8.dp))
@@ -632,7 +621,7 @@ fun StudyTimerSetupScreen(
               text = "Start Timer",
               fontSize = 16.sp,
               fontWeight = FontWeight.SemiBold,
-              color = Color.White,
+              color = colors.onPrimary,
             )
           }
         }
@@ -653,7 +642,7 @@ fun StudyTimerSetupScreen(
               text =
                 if (selectedBook == null) "Add a book to start a timer"
                 else "Add a chapter to ${selectedBook.name}",
-              color = PrimaryIndigo,
+              color = colors.primary,
               fontWeight = FontWeight.Medium,
             )
           }
@@ -703,14 +692,15 @@ private fun ActiveTimerSetupBanner(
   liveStudyingState: StateFlow<LiveStudyingUiState>,
   onClick: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val liveStudying by liveStudyingState.collectAsStateWithLifecycle()
   val activeMeta = liveStudying.activeMeta
   val bannerShape = RoundedCornerShape(18.dp)
   Surface(
     onClick = onClick,
     shape = bannerShape,
-    color = LightGreenTint,
-    border = BorderStroke(1.dp, LightGreenBorder),
+    color = colors.successTint,
+    border = BorderStroke(1.dp, colors.successBorder),
     modifier = Modifier.fillMaxWidth().testTag("timer_setup_active_banner"),
   ) {
     Row(
@@ -723,13 +713,13 @@ private fun ActiveTimerSetupBanner(
           text = "Active session running",
           fontSize = 15.sp,
           fontWeight = FontWeight.Bold,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
         if (activeMeta != null) {
           Text(
             text = "${activeMeta.bookName} • ${liveStudying.primaryClockDisplay}",
             fontSize = 13.sp,
-            color = SuccessGreen,
+            color = colors.success,
             fontWeight = FontWeight.SemiBold,
           )
         }
@@ -738,7 +728,7 @@ private fun ActiveTimerSetupBanner(
         text = "Open",
         fontSize = 14.sp,
         fontWeight = FontWeight.SemiBold,
-        color = PrimaryIndigo,
+        color = colors.primary,
       )
     }
   }
@@ -754,18 +744,23 @@ private fun TimerModeOptionCard(
   testTag: String,
   modifier: Modifier = Modifier,
 ) {
+  val colors = AppTheme.colors
   val tileShape = RoundedCornerShape(16.dp)
+  val selectedBrush =
+    Brush.verticalGradient(listOf(colors.primaryGradientTop, colors.primaryGradientBottom))
+  val unselectedBrush =
+    Brush.verticalGradient(listOf(colors.setupTileStart, colors.setupTileEnd))
   Surface(
     onClick = onClick,
     shape = tileShape,
     color = Color.Transparent,
-    border = if (selected) null else BorderStroke(1.dp, Color(0xFFE3E6F4)),
+    border = if (selected) null else BorderStroke(1.dp, colors.tileBorder),
     modifier = modifier.height(98.dp).testTag(testTag),
   ) {
     Column(
       modifier =
         Modifier.fillMaxSize()
-          .background(if (selected) SetupPrimaryGradientBrush else SetupUnselectedTileBrush)
+          .background(if (selected) selectedBrush else unselectedBrush)
           .padding(12.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.Center,
@@ -773,7 +768,7 @@ private fun TimerModeOptionCard(
       Icon(
         imageVector = icon,
         contentDescription = null,
-        tint = if (selected) Color.White else TextPrimary,
+        tint = if (selected) colors.onPrimary else colors.textPrimary,
         modifier = Modifier.size(24.dp),
       )
       Spacer(modifier = Modifier.height(6.dp))
@@ -781,13 +776,13 @@ private fun TimerModeOptionCard(
         text = title,
         fontSize = 15.sp,
         fontWeight = FontWeight.Bold,
-        color = if (selected) Color.White else TextPrimary,
+        color = if (selected) colors.onPrimary else colors.textPrimary,
       )
       Spacer(modifier = Modifier.height(1.dp))
       Text(
         text = subtitle,
         fontSize = 12.sp,
-        color = if (selected) Color.White.copy(alpha = 0.85f) else TextSecondary,
+        color = if (selected) colors.onPrimary.copy(alpha = 0.85f) else colors.textSecondary,
       )
     }
   }

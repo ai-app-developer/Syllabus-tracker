@@ -84,17 +84,7 @@ import com.example.timer.ComputedTimerMetrics
 import com.example.timer.TimerAlarmScheduler
 import com.example.timer.TimerMath
 import com.example.timer.TimerMode
-import com.example.ui.theme.AppBackground
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.ErrorRed
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightGreenTint
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.LightRedTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.SuccessGreen
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.AppTheme
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -114,6 +104,7 @@ fun SessionGoalDialog(
   onDismiss: () -> Unit,
   onConfirm: (Int?) -> Unit,
 ) {
+  val colors = AppTheme.colors
   val initial = currentGoalMinutes ?: 90
   var hours by remember(currentGoalMinutes) { mutableIntStateOf((initial / 60).coerceIn(0, 8)) }
   var minutes by remember(currentGoalMinutes) { mutableIntStateOf((initial % 60).coerceIn(0, 55)) }
@@ -123,13 +114,13 @@ fun SessionGoalDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Text(
         text = "Session Goal",
         style = MaterialTheme.typography.titleLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
     },
     text = {
@@ -137,7 +128,7 @@ fun SessionGoalDialog(
         Text(
           text = "Set a target reading duration or leave unset.",
           style = MaterialTheme.typography.bodyMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
         Spacer(modifier = Modifier.height(12.dp))
         FlowRow(
@@ -150,10 +141,10 @@ fun SessionGoalDialog(
             label = { Text("No goal") },
             colors =
               FilterChipDefaults.filterChipColors(
-                selectedContainerColor = PrimaryIndigo,
-                selectedLabelColor = Color.White,
-                containerColor = AppBackground,
-                labelColor = TextPrimary,
+                selectedContainerColor = colors.primarySolid,
+                selectedLabelColor = colors.onPrimary,
+                containerColor = colors.background,
+                labelColor = colors.textPrimary,
               ),
           )
           presets.forEach { (presetMin, label) ->
@@ -169,10 +160,10 @@ fun SessionGoalDialog(
                 label = { Text(label) },
                 colors =
                   FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = PrimaryIndigo,
-                    selectedLabelColor = Color.White,
-                    containerColor = AppBackground,
-                    labelColor = TextPrimary,
+                    selectedContainerColor = colors.primarySolid,
+                    selectedLabelColor = colors.onPrimary,
+                    containerColor = colors.background,
+                    labelColor = colors.textPrimary,
                   ),
               )
             }
@@ -218,15 +209,19 @@ fun SessionGoalDialog(
           if (noGoalSelected || total <= 0) onConfirm(null) else onConfirm(total)
         },
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = colors.primarySolid,
+            contentColor = colors.onPrimary,
+          ),
         modifier = Modifier.testTag("session_goal_save_button"),
       ) {
-        Text("Apply", color = Color.White)
+        Text("Apply")
       }
     },
     dismissButton = {
       TextButton(onClick = onDismiss) {
-        Text("Cancel", color = TextSecondary)
+        Text("Cancel", color = colors.textSecondary)
       }
     },
   )
@@ -239,18 +234,19 @@ fun PomodoroCustomDialog(
   onDismiss: () -> Unit,
   onConfirm: (Int, Int) -> Unit,
 ) {
+  val colors = AppTheme.colors
   var focusMin by remember(initialFocusMinutes) { mutableIntStateOf(initialFocusMinutes.coerceIn(5, 120)) }
   var breakMin by remember(initialBreakMinutes) { mutableIntStateOf(initialBreakMinutes.coerceIn(1, 30)) }
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Text(
         text = "Custom Pomodoro",
         style = MaterialTheme.typography.titleLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
     },
     text = {
@@ -276,14 +272,18 @@ fun PomodoroCustomDialog(
       Button(
         onClick = { onConfirm(focusMin, breakMin) },
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = colors.primarySolid,
+            contentColor = colors.onPrimary,
+          ),
       ) {
-        Text("Save", color = Color.White)
+        Text("Save")
       }
     },
     dismissButton = {
       TextButton(onClick = onDismiss) {
-        Text("Cancel", color = TextSecondary)
+        Text("Cancel", color = colors.textSecondary)
       }
     },
   )
@@ -296,16 +296,17 @@ private fun DurationStepper(
   onDecrement: () -> Unit,
   onIncrement: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    Text(text = label, style = MaterialTheme.typography.labelMedium, color = TextSecondary)
+    Text(text = label, style = MaterialTheme.typography.labelMedium, color = colors.textSecondary)
     Spacer(modifier = Modifier.height(6.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
       FilledTonalIconButton(
         onClick = onDecrement,
         colors =
           IconButtonDefaults.filledTonalIconButtonColors(
-            containerColor = LightIndigoTint,
-            contentColor = PrimaryIndigo,
+            containerColor = colors.tint,
+            contentColor = colors.primary,
           ),
         modifier = Modifier.size(40.dp),
       ) {
@@ -314,15 +315,15 @@ private fun DurationStepper(
       Text(
         text = value.toString().padStart(2, '0'),
         style = MaterialTheme.typography.titleLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
         modifier = Modifier.padding(horizontal = 12.dp),
       )
       FilledTonalIconButton(
         onClick = onIncrement,
         colors =
           IconButtonDefaults.filledTonalIconButtonColors(
-            containerColor = LightIndigoTint,
-            contentColor = PrimaryIndigo,
+            containerColor = colors.tint,
+            contentColor = colors.primary,
           ),
         modifier = Modifier.size(40.dp),
       ) {
@@ -340,11 +341,12 @@ fun StopSessionSummaryDialog(
   onDiscard: () -> Unit,
   onSave: (String) -> Unit,
 ) {
+  val colors = AppTheme.colors
   var notesText by remember(meta.state.sessionId) { mutableStateOf(meta.state.notes) }
 
   AlertDialog(
     onDismissRequest = onResume,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Row(verticalAlignment = Alignment.CenterVertically) {
@@ -352,13 +354,13 @@ fun StopSessionSummaryDialog(
           modifier =
             Modifier.size(38.dp)
               .clip(RoundedCornerShape(10.dp))
-              .background(LightIndigoTint),
+              .background(colors.tint),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Outlined.Timer,
             contentDescription = null,
-            tint = PrimaryIndigo,
+            tint = colors.primary,
             modifier = Modifier.size(20.dp),
           )
         }
@@ -367,12 +369,12 @@ fun StopSessionSummaryDialog(
           Text(
             text = "Finish Study Session?",
             style = MaterialTheme.typography.titleLarge,
-            color = TextPrimary,
+            color = colors.textPrimary,
           )
           Text(
             text = "${meta.bookName} • ${meta.chapterLabel}",
             style = MaterialTheme.typography.bodyMedium,
-            color = TextSecondary,
+            color = colors.textSecondary,
           )
         }
       }
@@ -381,8 +383,8 @@ fun StopSessionSummaryDialog(
       Column(modifier = Modifier.fillMaxWidth()) {
         Surface(
           shape = RoundedCornerShape(12.dp),
-          color = AppBackground,
-          border = BorderStroke(1.dp, HairlineBorder),
+          color = colors.background,
+          border = BorderStroke(1.dp, colors.border),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(modifier = Modifier.padding(12.dp)) {
@@ -407,10 +409,13 @@ fun StopSessionSummaryDialog(
           shape = RoundedCornerShape(12.dp),
           colors =
             OutlinedTextFieldDefaults.colors(
-              focusedBorderColor = PrimaryIndigo,
-              unfocusedBorderColor = HairlineBorder,
-              focusedContainerColor = CardSurface,
-              unfocusedContainerColor = CardSurface,
+              focusedBorderColor = colors.primary,
+              unfocusedBorderColor = colors.border,
+              focusedContainerColor = colors.surface,
+              unfocusedContainerColor = colors.surface,
+              focusedTextColor = colors.textPrimary,
+              unfocusedTextColor = colors.textPrimary,
+              cursorColor = colors.primary,
             ),
           modifier = Modifier.fillMaxWidth().testTag("stop_summary_notes_input"),
         )
@@ -418,19 +423,23 @@ fun StopSessionSummaryDialog(
         Button(
           onClick = { onSave(notesText) },
           shape = RoundedCornerShape(12.dp),
-          colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = colors.primarySolid,
+              contentColor = colors.onPrimary,
+            ),
           modifier = Modifier.fillMaxWidth().height(48.dp).testTag("stop_summary_save_button"),
         ) {
-          Text("Save Session", color = Color.White, fontWeight = FontWeight.SemiBold)
+          Text("Save Session", fontWeight = FontWeight.SemiBold)
         }
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedButton(
           onClick = onResume,
           shape = RoundedCornerShape(12.dp),
-          border = BorderStroke(1.dp, HairlineBorder),
+          border = BorderStroke(1.dp, colors.border),
           modifier = Modifier.fillMaxWidth().height(48.dp).testTag("stop_summary_resume_button"),
         ) {
-          Text("Resume Studying", color = TextPrimary, fontWeight = FontWeight.Medium)
+          Text("Resume Studying", color = colors.textPrimary, fontWeight = FontWeight.Medium)
         }
       }
     },
@@ -439,7 +448,7 @@ fun StopSessionSummaryDialog(
         onClick = onDiscard,
         modifier = Modifier.testTag("stop_summary_discard_button"),
       ) {
-        Text("Discard", color = ErrorRed, fontWeight = FontWeight.SemiBold)
+        Text("Discard", color = colors.error, fontWeight = FontWeight.SemiBold)
       }
     },
   )
@@ -452,6 +461,7 @@ fun TimerRecoveryDialog(
   onSaveUpToLastKnown: () -> Unit,
   onDiscard: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val lastSeenTime =
     remember(data.state.lastKnownWallTimeMs) {
       Instant.ofEpochMilli(data.state.lastKnownWallTimeMs)
@@ -461,7 +471,7 @@ fun TimerRecoveryDialog(
 
   AlertDialog(
     onDismissRequest = {},
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Row(verticalAlignment = Alignment.CenterVertically) {
@@ -469,13 +479,13 @@ fun TimerRecoveryDialog(
           modifier =
             Modifier.size(38.dp)
               .clip(RoundedCornerShape(10.dp))
-              .background(LightIndigoTint),
+              .background(colors.tint),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             imageVector = Icons.Outlined.Restore,
             contentDescription = null,
-            tint = PrimaryIndigo,
+            tint = colors.primary,
             modifier = Modifier.size(20.dp),
           )
         }
@@ -483,7 +493,7 @@ fun TimerRecoveryDialog(
         Text(
           text = "Recover Unfinished Session",
           style = MaterialTheme.typography.titleLarge,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
       }
     },
@@ -493,13 +503,13 @@ fun TimerRecoveryDialog(
           text =
             "A study session for ${data.bookName} (${data.chapterLabel}) was interrupted before saving.",
           style = MaterialTheme.typography.bodyMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
         Spacer(modifier = Modifier.height(12.dp))
         Surface(
           shape = RoundedCornerShape(12.dp),
-          color = AppBackground,
-          border = BorderStroke(1.dp, HairlineBorder),
+          color = colors.background,
+          border = BorderStroke(1.dp, colors.border),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(modifier = Modifier.padding(12.dp)) {
@@ -515,19 +525,23 @@ fun TimerRecoveryDialog(
         Button(
           onClick = onResume,
           shape = RoundedCornerShape(12.dp),
-          colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+          colors =
+            ButtonDefaults.buttonColors(
+              containerColor = colors.primarySolid,
+              contentColor = colors.onPrimary,
+            ),
           modifier = Modifier.fillMaxWidth().height(48.dp).testTag("recovery_resume_button"),
         ) {
-          Text("Recover session", color = Color.White, fontWeight = FontWeight.SemiBold)
+          Text("Recover session", fontWeight = FontWeight.SemiBold)
         }
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedButton(
           onClick = onSaveUpToLastKnown,
           shape = RoundedCornerShape(12.dp),
-          border = BorderStroke(1.dp, HairlineBorder),
+          border = BorderStroke(1.dp, colors.border),
           modifier = Modifier.fillMaxWidth().height(48.dp).testTag("recovery_save_button"),
         ) {
-          Text("Save up to last known time", color = TextPrimary, fontWeight = FontWeight.Medium)
+          Text("Save up to last known time", color = colors.textPrimary, fontWeight = FontWeight.Medium)
         }
       }
     },
@@ -536,7 +550,7 @@ fun TimerRecoveryDialog(
         onClick = onDiscard,
         modifier = Modifier.testTag("recovery_discard_button"),
       ) {
-        Text("Discard", color = ErrorRed, fontWeight = FontWeight.SemiBold)
+        Text("Discard", color = colors.error, fontWeight = FontWeight.SemiBold)
       }
     },
   )
@@ -550,6 +564,7 @@ fun SessionDetailDialog(
   onSaveNotes: (String) -> Unit,
   onRequestDelete: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   var notesText by remember(item.session.id) { mutableStateOf(item.session.notes) }
   val (dateText, startStr, endStr) =
     remember(item.session.id, item.session.startWallTimeMs, item.session.endWallTimeMs) {
@@ -569,19 +584,19 @@ fun SessionDetailDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Column {
         Text(
           text = item.bookName,
           style = MaterialTheme.typography.titleLarge,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
         Text(
           text = "Chapter ${item.chapterNumber}: ${item.chapterName}",
           style = MaterialTheme.typography.bodyMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       }
     },
@@ -591,8 +606,8 @@ fun SessionDetailDialog(
       ) {
         Surface(
           shape = RoundedCornerShape(12.dp),
-          color = AppBackground,
-          border = BorderStroke(1.dp, HairlineBorder),
+          color = colors.background,
+          border = BorderStroke(1.dp, colors.border),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(modifier = Modifier.padding(12.dp)) {
@@ -620,13 +635,13 @@ fun SessionDetailDialog(
           Text(
             text = "Recorded Laps (${laps.size})",
             style = MaterialTheme.typography.labelLarge,
-            color = TextSecondary,
+            color = colors.textSecondary,
           )
           Spacer(modifier = Modifier.height(6.dp))
           Surface(
             shape = RoundedCornerShape(12.dp),
-            color = AppBackground,
-            border = BorderStroke(1.dp, HairlineBorder),
+            color = colors.background,
+            border = BorderStroke(1.dp, colors.border),
             modifier = Modifier.fillMaxWidth(),
           ) {
             Column(modifier = Modifier.padding(10.dp)) {
@@ -635,7 +650,7 @@ fun SessionDetailDialog(
                   if (idx > 0) {
                     HorizontalDivider(
                       thickness = 1.dp,
-                      color = HairlineBorder,
+                      color = colors.border,
                       modifier = Modifier.padding(vertical = 6.dp),
                     )
                   }
@@ -648,21 +663,21 @@ fun SessionDetailDialog(
                       Icon(
                         imageVector = Icons.Outlined.Flag,
                         contentDescription = null,
-                        tint = PrimaryIndigo,
+                        tint = colors.primary,
                         modifier = Modifier.size(16.dp),
                       )
                       Spacer(modifier = Modifier.width(6.dp))
                       Text(
                         text = lap.label ?: "Lap ${idx + 1}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = TextPrimary,
+                        color = colors.textPrimary,
                       )
                     }
                     Text(
                       text = TimerMath.formatHms(lap.elapsedAtEventMs),
                       style = MaterialTheme.typography.bodyMedium,
                       fontWeight = FontWeight.SemiBold,
-                      color = TextPrimary,
+                      color = colors.textPrimary,
                     )
                   }
                 }
@@ -681,10 +696,13 @@ fun SessionDetailDialog(
           shape = RoundedCornerShape(12.dp),
           colors =
             OutlinedTextFieldDefaults.colors(
-              focusedBorderColor = PrimaryIndigo,
-              unfocusedBorderColor = HairlineBorder,
-              focusedContainerColor = CardSurface,
-              unfocusedContainerColor = CardSurface,
+              focusedBorderColor = colors.primary,
+              unfocusedBorderColor = colors.border,
+              focusedContainerColor = colors.surface,
+              unfocusedContainerColor = colors.surface,
+              focusedTextColor = colors.textPrimary,
+              unfocusedTextColor = colors.textPrimary,
+              cursorColor = colors.primary,
             ),
           modifier = Modifier.fillMaxWidth().testTag("session_detail_notes_input"),
         )
@@ -694,10 +712,14 @@ fun SessionDetailDialog(
       Button(
         onClick = { onSaveNotes(notesText) },
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = colors.primarySolid,
+            contentColor = colors.onPrimary,
+          ),
         modifier = Modifier.testTag("session_detail_save_button"),
       ) {
-        Text("Save", color = Color.White)
+        Text("Save")
       }
     },
     dismissButton = {
@@ -706,10 +728,10 @@ fun SessionDetailDialog(
           onClick = onRequestDelete,
           modifier = Modifier.testTag("session_detail_delete_button"),
         ) {
-          Text("Delete", color = ErrorRed)
+          Text("Delete", color = colors.error)
         }
         TextButton(onClick = onDismiss) {
-          Text("Close", color = TextSecondary)
+          Text("Close", color = colors.textSecondary)
         }
       }
     },
@@ -718,16 +740,17 @@ fun SessionDetailDialog(
 
 @Composable
 private fun SummaryMetricRow(label: String, value: String) {
+  val colors = AppTheme.colors
   Row(
     modifier = Modifier.fillMaxWidth(),
     horizontalArrangement = Arrangement.SpaceBetween,
   ) {
-    Text(text = label, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+    Text(text = label, style = MaterialTheme.typography.bodyMedium, color = colors.textSecondary)
     Text(
       text = value,
       style = MaterialTheme.typography.bodyMedium,
       fontWeight = FontWeight.SemiBold,
-      color = TextPrimary,
+      color = colors.textPrimary,
     )
   }
 }
@@ -754,6 +777,7 @@ fun TimerPermissionsChecklistDialog(
   onDismiss: () -> Unit,
   onContinue: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
   var status by remember(context) { mutableStateOf(readTimerPermissionStatus(context)) }
@@ -794,13 +818,13 @@ fun TimerPermissionsChecklistDialog(
 
   AlertDialog(
     onDismissRequest = onDismiss,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Text(
         text = "Permissions needed for timer alarm",
         style = MaterialTheme.typography.titleLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
     },
     text = {
@@ -904,12 +928,15 @@ fun TimerPermissionsChecklistDialog(
       Button(
         onClick = onContinue,
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = colors.primarySolid,
+            contentColor = colors.onPrimary,
+          ),
         modifier = Modifier.testTag("permission_checklist_continue_button"),
       ) {
         Text(
           text = if (isStartFlow) "Continue anyway" else "Done",
-          color = Color.White,
         )
       }
     },
@@ -920,7 +947,7 @@ fun TimerPermissionsChecklistDialog(
             onClick = onDismiss,
             modifier = Modifier.testTag("permission_checklist_cancel_button"),
           ) {
-            Text("Cancel", color = TextSecondary)
+            Text("Cancel", color = colors.textSecondary)
           }
         }
       } else {
@@ -938,10 +965,11 @@ private fun PermissionChecklistRow(
   allowButtonTag: String,
   onAllowClick: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   Surface(
     shape = RoundedCornerShape(12.dp),
-    color = AppBackground,
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.background,
+    border = BorderStroke(1.dp, colors.border),
     modifier = Modifier.fillMaxWidth(),
   ) {
     Row(
@@ -958,19 +986,19 @@ private fun PermissionChecklistRow(
             text = title,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
-            color = TextPrimary,
+            color = colors.textPrimary,
             modifier = Modifier.align(Alignment.CenterVertically),
           )
           Surface(
             shape = RoundedCornerShape(999.dp),
-            color = if (allowed) LightGreenTint else LightRedTint,
+            color = if (allowed) colors.successTint else colors.errorTint,
             modifier = Modifier.align(Alignment.CenterVertically),
           ) {
             Text(
               text = if (allowed) "Allowed" else "Not allowed",
               fontSize = 11.sp,
               fontWeight = FontWeight.SemiBold,
-              color = if (allowed) SuccessGreen else ErrorRed,
+              color = if (allowed) colors.success else colors.error,
               modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
             )
           }
@@ -979,13 +1007,13 @@ private fun PermissionChecklistRow(
         Text(
           text = description,
           style = MaterialTheme.typography.bodySmall,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       }
       OutlinedButton(
         onClick = onAllowClick,
         shape = RoundedCornerShape(10.dp),
-        border = BorderStroke(1.dp, PrimaryIndigo),
+        border = BorderStroke(1.dp, colors.primary),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier.heightIn(min = 48.dp).testTag(allowButtonTag),
       ) {
@@ -993,7 +1021,7 @@ private fun PermissionChecklistRow(
           text = "Allow",
           fontSize = 13.sp,
           fontWeight = FontWeight.SemiBold,
-          color = PrimaryIndigo,
+          color = colors.primary,
         )
       }
     }
@@ -1005,10 +1033,11 @@ private fun PermissionChecklistNoteRow(
   title: String,
   description: String,
 ) {
+  val colors = AppTheme.colors
   Surface(
     shape = RoundedCornerShape(12.dp),
-    color = LightIndigoTint.copy(alpha = 0.55f),
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.tint.copy(alpha = 0.7f),
+    border = BorderStroke(1.dp, colors.border),
     modifier = Modifier.fillMaxWidth(),
   ) {
     Row(
@@ -1018,7 +1047,7 @@ private fun PermissionChecklistNoteRow(
       Icon(
         imageVector = Icons.Outlined.Info,
         contentDescription = null,
-        tint = PrimaryIndigo,
+        tint = colors.primary,
         modifier = Modifier.size(18.dp).padding(top = 2.dp),
       )
       Spacer(modifier = Modifier.width(8.dp))
@@ -1027,13 +1056,13 @@ private fun PermissionChecklistNoteRow(
           text = title,
           style = MaterialTheme.typography.labelLarge,
           fontWeight = FontWeight.SemiBold,
-          color = TextPrimary,
+          color = colors.textPrimary,
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
           text = description,
           style = MaterialTheme.typography.bodySmall,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       }
     }
@@ -1063,15 +1092,16 @@ fun TimerAlarmTestDialog(
   onOpenAlarmLog: () -> Unit,
   onDismiss: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   AlertDialog(
     onDismissRequest = onDismiss,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Text(
         text = "Timer alarm test",
         style = MaterialTheme.typography.titleLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
     },
     text = {
@@ -1121,14 +1151,14 @@ fun TimerAlarmTestDialog(
         if (!scheduled10sStatus.isNullOrBlank()) {
           Surface(
             shape = RoundedCornerShape(12.dp),
-            color = LightIndigoTint.copy(alpha = 0.6f),
-            border = BorderStroke(1.dp, HairlineBorder),
+            color = colors.tint.copy(alpha = 0.7f),
+            border = BorderStroke(1.dp, colors.border),
             modifier = Modifier.fillMaxWidth().testTag("test_alarm_10s_status"),
           ) {
             Text(
               text = scheduled10sStatus,
               style = MaterialTheme.typography.bodySmall,
-              color = TextPrimary,
+              color = colors.textPrimary,
               modifier = Modifier.padding(12.dp),
             )
           }
@@ -1139,12 +1169,12 @@ fun TimerAlarmTestDialog(
         OutlinedButton(
           onClick = onSchedule10sTest,
           shape = RoundedCornerShape(10.dp),
-          border = BorderStroke(1.dp, PrimaryIndigo),
+          border = BorderStroke(1.dp, colors.primary),
           modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("test_alarm_10s_button"),
         ) {
           Text(
             text = "Test in 10 seconds",
-            color = PrimaryIndigo,
+            color = colors.primary,
             fontWeight = FontWeight.SemiBold,
           )
         }
@@ -1156,19 +1186,19 @@ fun TimerAlarmTestDialog(
           OutlinedButton(
             onClick = onOpenAlarmLog,
             shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, HairlineBorder),
+            border = BorderStroke(1.dp, colors.border),
             modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("test_alarm_log_button"),
           ) {
-            Text(text = "Alarm log", color = TextPrimary)
+            Text(text = "Alarm log", color = colors.textPrimary)
           }
           OutlinedButton(
             onClick = onRunTestAgain,
             enabled = !isRunningTest,
             shape = RoundedCornerShape(10.dp),
-            border = BorderStroke(1.dp, HairlineBorder),
+            border = BorderStroke(1.dp, colors.border),
             modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("test_alarm_run_again_button"),
           ) {
-            Text(text = if (isRunningTest) "Testing..." else "Run again", color = PrimaryIndigo)
+            Text(text = if (isRunningTest) "Testing..." else "Run again", color = colors.primary)
           }
         }
       }
@@ -1177,10 +1207,14 @@ fun TimerAlarmTestDialog(
       Button(
         onClick = onDismiss,
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = colors.primarySolid,
+            contentColor = colors.onPrimary,
+          ),
         modifier = Modifier.testTag("test_alarm_done_button"),
       ) {
-        Text(text = "Done", color = Color.White)
+        Text(text = "Done")
       }
     },
   )
@@ -1192,10 +1226,11 @@ private fun TestResultRow(
   value: String,
   healthy: Boolean,
 ) {
+  val colors = AppTheme.colors
   Surface(
     shape = RoundedCornerShape(10.dp),
-    color = AppBackground,
-    border = BorderStroke(1.dp, HairlineBorder),
+    color = colors.background,
+    border = BorderStroke(1.dp, colors.border),
     modifier = Modifier.fillMaxWidth(),
   ) {
     Row(
@@ -1206,18 +1241,18 @@ private fun TestResultRow(
       Text(
         text = label,
         style = MaterialTheme.typography.bodyMedium,
-        color = TextSecondary,
+        color = colors.textSecondary,
         modifier = Modifier.weight(1f).padding(end = 8.dp),
       )
       Surface(
         shape = RoundedCornerShape(999.dp),
-        color = if (healthy) LightGreenTint else LightRedTint,
+        color = if (healthy) colors.successTint else colors.errorTint,
       ) {
         Text(
           text = value,
           fontSize = 12.sp,
           fontWeight = FontWeight.SemiBold,
-          color = if (healthy) SuccessGreen else ErrorRed,
+          color = if (healthy) colors.success else colors.error,
           modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
         )
       }
@@ -1231,18 +1266,19 @@ fun AlarmDiagnosticLogDialog(
   onClear: () -> Unit,
   onDismiss: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   val timeFormatter = remember {
     DateTimeFormatter.ofPattern("MM-dd HH:mm:ss", Locale.US)
   }
   AlertDialog(
     onDismissRequest = onDismiss,
-    containerColor = CardSurface,
+    containerColor = colors.dialogSurface,
     shape = RoundedCornerShape(16.dp),
     title = {
       Text(
         text = "Alarm log (last 20)",
         style = MaterialTheme.typography.titleLarge,
-        color = TextPrimary,
+        color = colors.textPrimary,
       )
     },
     text = {
@@ -1250,7 +1286,7 @@ fun AlarmDiagnosticLogDialog(
         Text(
           text = "No alarm events recorded yet.",
           style = MaterialTheme.typography.bodyMedium,
-          color = TextSecondary,
+          color = colors.textSecondary,
         )
       } else {
         Column(
@@ -1270,8 +1306,8 @@ fun AlarmDiagnosticLogDialog(
             val isSuccess = entry.outcome == AlarmDiagnosticLog.OUTCOME_PLAYED
             Surface(
               shape = RoundedCornerShape(10.dp),
-              color = AppBackground,
-              border = BorderStroke(1.dp, HairlineBorder),
+              color = colors.background,
+              border = BorderStroke(1.dp, colors.border),
               modifier = Modifier.fillMaxWidth(),
             ) {
               Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
@@ -1284,17 +1320,17 @@ fun AlarmDiagnosticLogDialog(
                     text = "${entry.eventType} • ${entry.source}",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary,
+                    color = colors.textPrimary,
                   )
                   Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = if (isSuccess) LightGreenTint else LightIndigoTint,
+                    color = if (isSuccess) colors.successTint else colors.tint,
                   ) {
                     Text(
                       text = entry.outcome,
                       fontSize = 11.sp,
                       fontWeight = FontWeight.SemiBold,
-                      color = if (isSuccess) SuccessGreen else PrimaryIndigo,
+                      color = if (isSuccess) colors.success else colors.primary,
                       modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                     )
                   }
@@ -1303,14 +1339,14 @@ fun AlarmDiagnosticLogDialog(
                 Text(
                   text = timeText,
                   style = MaterialTheme.typography.bodySmall,
-                  color = TextSecondary,
+                  color = colors.textSecondary,
                 )
                 if (entry.detail.isNotBlank()) {
                   Spacer(modifier = Modifier.height(2.dp))
                   Text(
                     text = entry.detail,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
+                    color = colors.textSecondary,
                   )
                 }
               }
@@ -1323,10 +1359,14 @@ fun AlarmDiagnosticLogDialog(
       Button(
         onClick = onDismiss,
         shape = RoundedCornerShape(12.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+        colors =
+          ButtonDefaults.buttonColors(
+            containerColor = colors.primarySolid,
+            contentColor = colors.onPrimary,
+          ),
         modifier = Modifier.testTag("alarm_log_close_button"),
       ) {
-        Text(text = "Close", color = Color.White)
+        Text(text = "Close")
       }
     },
     dismissButton =
@@ -1336,7 +1376,7 @@ fun AlarmDiagnosticLogDialog(
             onClick = onClear,
             modifier = Modifier.testTag("alarm_log_clear_button"),
           ) {
-            Text(text = "Clear", color = ErrorRed)
+            Text(text = "Clear", color = colors.error)
           }
         }
       } else {

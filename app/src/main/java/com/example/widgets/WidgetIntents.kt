@@ -16,6 +16,8 @@ object WidgetIntents {
   const val ACTION_OPEN_PROGRESS = "com.example.WIDGET_OPEN_PROGRESS"
 
   const val ACTION_COMPLETE_NEXT_CHAPTER = "com.example.WIDGET_COMPLETE_NEXT_CHAPTER"
+  const val ACTION_WIDGET_PIN_SUCCESS = "com.example.WIDGET_PIN_SUCCESS"
+  const val EXTRA_WIDGET_KEY = "widget_key"
 
   private const val PENDING_FLAGS =
     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT

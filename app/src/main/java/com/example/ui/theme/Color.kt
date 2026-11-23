@@ -29,6 +29,10 @@ val LightGreenBorder = Color(0xFFD0EBD9)
 
 val StreakOrange = Color(0xFFF59E0B)
 val SoftOrangeTint = Color(0xFFFEF3C7)
+val WarningTextAmber = Color(0xFFB45309)
+
+val BlueBadgeTint = Color(0xFF2563EB)
+val BlueBadgeBg = Color(0xFFEFF6FF)
 
 val TextPrimary = Color(0xFF1A1A2E)
 val TextSecondary = Color(0xFF6B7280)

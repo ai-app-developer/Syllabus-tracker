@@ -56,16 +56,7 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.local.entity.BookEntity
 import com.example.data.local.entity.ChapterEntity
-import com.example.ui.theme.AppBackground
-import com.example.ui.theme.CardSurface
-import com.example.ui.theme.ErrorRed
-import com.example.ui.theme.HairlineBorder
-import com.example.ui.theme.LightIndigoTint
-import com.example.ui.theme.PrimaryIndigo
-import com.example.ui.theme.ProgressTrack
-import com.example.ui.theme.SuccessGreen
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.AppTheme
 import com.example.ui.viewmodel.BookDetailUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,6 +72,7 @@ fun BookDetailScreen(
   onEditChapterClick: (ChapterEntity) -> Unit,
   onDeleteChapterClick: (ChapterEntity) -> Unit,
 ) {
+  val colors = AppTheme.colors
   val book = state.book
   val chapters = state.chapters
 
@@ -96,13 +88,13 @@ fun BookDetailScreen(
   val fraction = state.fraction
 
   Scaffold(
-    containerColor = AppBackground,
+    containerColor = colors.screenBackground,
     topBar = {
       TopAppBar(
         colors =
           TopAppBarDefaults.topAppBarColors(
-            containerColor = AppBackground,
-            titleContentColor = TextPrimary,
+            containerColor = colors.screenBackground,
+            titleContentColor = colors.textPrimary,
           ),
         navigationIcon = {
           IconButton(
@@ -112,7 +104,7 @@ fun BookDetailScreen(
             Icon(
               imageVector = Icons.AutoMirrored.Filled.ArrowBack,
               contentDescription = "Back",
-              tint = TextPrimary,
+              tint = colors.textPrimary,
             )
           }
         },
@@ -133,7 +125,7 @@ fun BookDetailScreen(
               Icon(
                 imageVector = Icons.Outlined.Edit,
                 contentDescription = "Rename book",
-                tint = TextPrimary,
+                tint = colors.textPrimary,
               )
             }
             IconButton(
@@ -143,7 +135,7 @@ fun BookDetailScreen(
               Icon(
                 imageVector = Icons.Outlined.Delete,
                 contentDescription = "Delete book",
-                tint = ErrorRed,
+                tint = colors.error,
               )
             }
           }
@@ -160,9 +152,9 @@ fun BookDetailScreen(
       ) {
         Surface(
           shape = RoundedCornerShape(16.dp),
-          color = CardSurface,
-          border = BorderStroke(1.dp, HairlineBorder),
-          shadowElevation = 1.dp,
+          color = colors.surface,
+          border = BorderStroke(1.dp, colors.border),
+          shadowElevation = if (colors.isAmoled || colors.isGlass) 0.dp else 1.dp,
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(modifier = Modifier.padding(16.dp)) {
@@ -175,20 +167,20 @@ fun BookDetailScreen(
                 Text(
                   text = "$completedCount / $totalCount chapters",
                   style = MaterialTheme.typography.titleMedium,
-                  color = TextPrimary,
+                  color = colors.textPrimary,
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                   text = "${(totalCount - completedCount).coerceAtLeast(0)} remaining",
                   style = MaterialTheme.typography.bodyMedium,
-                  color = TextSecondary,
+                  color = colors.textSecondary,
                 )
               }
               Text(
                 text = "$percentage%",
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (totalCount > 0 && completedCount == totalCount) SuccessGreen else PrimaryIndigo,
+                color = if (totalCount > 0 && completedCount == totalCount) colors.success else colors.primary,
               )
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -197,7 +189,7 @@ fun BookDetailScreen(
                 Modifier.fillMaxWidth()
                   .height(7.dp)
                   .clip(RoundedCornerShape(4.dp))
-                  .background(ProgressTrack),
+                  .background(colors.progressTrack),
             ) {
               Box(
                 modifier =
@@ -205,8 +197,8 @@ fun BookDetailScreen(
                     .height(7.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(
-                      if (totalCount > 0 && completedCount == totalCount) SuccessGreen
-                      else PrimaryIndigo
+                      if (totalCount > 0 && completedCount == totalCount) colors.vibrantSuccess
+                      else colors.primarySolid
                     ),
               )
             }
@@ -222,8 +214,8 @@ fun BookDetailScreen(
           ) {
             Surface(
               shape = RoundedCornerShape(16.dp),
-              color = CardSurface,
-              border = BorderStroke(1.dp, HairlineBorder),
+              color = colors.surface,
+              border = BorderStroke(1.dp, colors.border),
               modifier = Modifier.fillMaxWidth(),
             ) {
               Column(
@@ -234,13 +226,13 @@ fun BookDetailScreen(
                   modifier =
                     Modifier.size(56.dp)
                       .clip(RoundedCornerShape(14.dp))
-                      .background(LightIndigoTint),
+                      .background(colors.tint),
                   contentAlignment = Alignment.Center,
                 ) {
                   Icon(
                     imageVector = Icons.AutoMirrored.Outlined.MenuBook,
                     contentDescription = null,
-                    tint = PrimaryIndigo,
+                    tint = colors.primary,
                     modifier = Modifier.size(28.dp),
                   )
                 }
@@ -248,19 +240,23 @@ fun BookDetailScreen(
                 Text(
                   text = "No chapters yet",
                   style = MaterialTheme.typography.titleLarge,
-                  color = TextPrimary,
+                  color = colors.textPrimary,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                   text = "Add chapters to this book to track your progress.",
                   style = MaterialTheme.typography.bodyMedium,
-                  color = TextSecondary,
+                  color = colors.textSecondary,
                 )
                 Spacer(modifier = Modifier.height(18.dp))
                 Button(
                   onClick = onAddChapterClick,
                   shape = RoundedCornerShape(24.dp),
-                  colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo),
+                  colors =
+                    ButtonDefaults.buttonColors(
+                      containerColor = colors.primarySolid,
+                      contentColor = colors.onPrimary,
+                    ),
                   modifier = Modifier.height(48.dp).testTag("empty_add_chapter_button"),
                 ) {
                   Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -296,8 +292,8 @@ fun BookDetailScreen(
             shape = RoundedCornerShape(26.dp),
             colors =
               ButtonDefaults.buttonColors(
-                containerColor = PrimaryIndigo,
-                contentColor = Color.White,
+                containerColor = colors.primarySolid,
+                contentColor = colors.onPrimary,
               ),
             modifier =
               Modifier.fillMaxWidth()
@@ -326,11 +322,12 @@ private fun ChapterItemCard(
   onEdit: () -> Unit,
   onDelete: () -> Unit,
 ) {
+  val colors = AppTheme.colors
   Surface(
     shape = RoundedCornerShape(16.dp),
-    color = CardSurface,
-    border = BorderStroke(1.dp, HairlineBorder),
-    shadowElevation = 1.dp,
+    color = colors.surface,
+    border = BorderStroke(1.dp, colors.border),
+    shadowElevation = if (colors.isAmoled || colors.isGlass) 0.dp else 1.dp,
     modifier = Modifier.fillMaxWidth().testTag("chapter_card_${chapter.id}"),
   ) {
     Row(
@@ -347,13 +344,13 @@ private fun ChapterItemCard(
       ) {
         if (chapter.isCompleted) {
           Box(
-            modifier = Modifier.size(24.dp).clip(CircleShape).background(SuccessGreen),
+            modifier = Modifier.size(24.dp).clip(CircleShape).background(colors.vibrantSuccess),
             contentAlignment = Alignment.Center,
           ) {
             Icon(
               imageVector = Icons.Default.Check,
               contentDescription = "Completed",
-              tint = Color.White,
+              tint = colors.onPrimary,
               modifier = Modifier.size(16.dp),
             )
           }
@@ -362,7 +359,7 @@ private fun ChapterItemCard(
             modifier =
               Modifier.size(24.dp)
                 .clip(CircleShape)
-                .border(2.dp, ProgressTrack, CircleShape),
+                .border(2.dp, colors.progressTrack, CircleShape),
           )
         }
       }
@@ -371,21 +368,21 @@ private fun ChapterItemCard(
         Box(
           modifier =
             Modifier.clip(RoundedCornerShape(6.dp))
-              .background(LightIndigoTint)
+              .background(colors.tint)
               .padding(horizontal = 8.dp, vertical = 2.dp),
         ) {
           Text(
             text = "Ch. ${chapter.number}",
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
-            color = PrimaryIndigo,
+            color = colors.primary,
           )
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
           text = chapter.name,
           style = MaterialTheme.typography.titleMedium,
-          color = if (chapter.isCompleted) TextSecondary else TextPrimary,
+          color = if (chapter.isCompleted) colors.textSecondary else colors.textPrimary,
           textDecoration = if (chapter.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
@@ -399,7 +396,7 @@ private fun ChapterItemCard(
         Icon(
           imageVector = Icons.Outlined.Edit,
           contentDescription = "Edit chapter",
-          tint = TextSecondary,
+          tint = colors.textSecondary,
           modifier = Modifier.size(20.dp),
         )
       }
@@ -411,7 +408,7 @@ private fun ChapterItemCard(
         Icon(
           imageVector = Icons.Outlined.Delete,
           contentDescription = "Delete chapter",
-          tint = ErrorRed,
+          tint = colors.error,
           modifier = Modifier.size(20.dp),
         )
       }

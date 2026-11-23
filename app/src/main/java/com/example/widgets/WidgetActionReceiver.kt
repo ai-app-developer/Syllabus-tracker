@@ -10,25 +10,45 @@ import kotlinx.coroutines.withContext
 
 class WidgetActionReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    if (intent.action != WidgetIntents.ACTION_COMPLETE_NEXT_CHAPTER) return
-
-    val pendingResult: PendingResult? = goAsync()
+    val action = intent.action ?: return
     val app = context.applicationContext as SyllabusApplication
-    app.applicationScope.launch {
-      try {
-        val completed =
-          withContext(Dispatchers.IO) {
-            app.syllabusRepository.completeNextIncompleteChapterFromWidget()
+
+    when (action) {
+      WidgetIntents.ACTION_COMPLETE_NEXT_CHAPTER -> {
+        val pendingResult: PendingResult? = goAsync()
+        app.applicationScope.launch {
+          try {
+            val completed =
+              withContext(Dispatchers.IO) {
+                app.syllabusRepository.completeNextIncompleteChapterFromWidget()
+              }
+            if (completed) {
+              WidgetUpdater.updateNow(app, force = true)
+            } else {
+              val openPlan =
+                WidgetIntents.createActivityIntent(app, WidgetIntents.ACTION_OPEN_TODAYS_PLAN)
+              app.startActivity(openPlan)
+            }
+          } finally {
+            pendingResult?.finish()
           }
-        if (completed) {
-          WidgetUpdater.updateNow(app, force = true)
-        } else {
-          val openPlan =
-            WidgetIntents.createActivityIntent(app, WidgetIntents.ACTION_OPEN_TODAYS_PLAN)
-          app.startActivity(openPlan)
         }
-      } finally {
-        pendingResult?.finish()
+      }
+
+      WidgetIntents.ACTION_WIDGET_PIN_SUCCESS -> {
+        val widgetKey = intent.getStringExtra(WidgetIntents.EXTRA_WIDGET_KEY).orEmpty()
+        val pendingResult: PendingResult? = goAsync()
+        app.applicationScope.launch {
+          try {
+            withContext(Dispatchers.IO) {
+              app.preferencesRepository.markWidgetEverAdded()
+            }
+            WidgetUpdater.updateNow(app, force = true)
+            WidgetPinManager.notifyPinSuccess(widgetKey)
+          } finally {
+            pendingResult?.finish()
+          }
+        }
       }
     }
   }
